@@ -17,7 +17,7 @@ systématique et massive — les cotes intègrent déjà la marge du bookmaker
 | Ingestion stats | NBA (nba_api) | Fait — testé (mocks) |
 | Modèle probabilités | Football — Poisson attaque/défense (Maher) | Fait — backtest OK sur ligue synthétique (bat le baseline) |
 | Modèle probabilités | NBA — Elo séquentiel + avantage terrain | Fait — backtest OK sur saison synthétique (bat le baseline) |
-| Ingestion cotes | The Odds API (h2h/1X2) | Fait — testé (mocks), clé à configurer |
+| Ingestion cotes | The Odds API (h2h/1X2) | Fait — testé, clé configurée, pipeline live validé |
 | Comparateur value bet | Cotes marché → dé-vigage → edge vs modèle | Fait — testé |
 | Bankroll tracker | Kelly fractionné (1/4 par défaut) + plafond + stop-loss | Fait — testé |
 | Panneau admin | Next.js + Supabase | Reporté après validation sur données réelles |
@@ -73,6 +73,40 @@ Limites de cette lecture, pour ne pas se raconter d'histoires :
 - Ceci compare au baseline naïf (fréquences brutes), **pas encore aux
   cotes réelles du marché**, qui intègrent bien plus d'information — c'est
   l'étape suivante (Odds API).
+
+## Pipeline live testé en conditions réelles (2026-07-26) — et sa faille
+
+Modèle entraîné sur PL 2025-26 (380 matchs), cotes réelles récupérées via
+The Odds API pour la 1ère journée de la saison 2026-27 (`run_live_value_bets.py`).
+
+Résultat brut : 4 "value bets" détectés sur 7 matchs prédictibles (3
+ignorés — équipes promues sans historique top-flight, ex Coventry City,
+Hull City, Ipswich Town). Le plus gros edge : Brentford-Tottenham,
+domicile, edge +11.1%, EV +19.3%.
+
+**Ce chiffre ne doit PAS être pris pour argent comptant.** Le modèle est
+entraîné sur les résultats de la saison passée et prédit des matchs d'une
+nouvelle saison, après un mercato estival complet (transferts, départs,
+changements d'entraîneur). Le modèle n'a aucune information là-dessus ; les
+bookmakers, si. Un edge apparent de +11% en franchissant une frontière de
+saison est plus probablement un angle mort du modèle (effectifs supposés
+inchangés) qu'une vraie faille de marché — cohérent avec le principe déjà
+posé : un edge qui semble trop beau doit faire suspecter le modèle, pas le
+marché.
+
+**Conclusion pratique** : ne pas utiliser ce modèle tel quel pour parier
+sur les toutes premières journées d'une nouvelle saison. Les prédictions
+redeviennent plus crédibles une fois que quelques journées de la saison en
+cours sont jouées (le modèle peut alors être ré-entraîné avec des données
+qui reflètent les effectifs actuels). Prochaine étape technique possible :
+réentraîner sur un mélange saison précédente (prior) + matchs déjà joués de
+la saison en cours, avec plus de poids sur les données récentes.
+
+Bug corrigé au passage : `normalize_team_name` ne gérait que les
+suffixes de club ("Arsenal FC" -> "arsenal") mais pas les préfixes
+("AFC Bournemouth" ne matchait pas "Bournemouth") — un match légitime
+(Manchester City vs Bournemouth) était ignoré à tort comme "équipe
+inconnue". Corrigé en retirant les tokens FC/AFC/CF où qu'ils apparaissent.
 
 ## Choix techniques
 

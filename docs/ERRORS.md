@@ -67,9 +67,12 @@ Format d'une entrée :
   un `FootballDataError` explicite ("restriction du tier gratuit...") au
   lieu de laisser remonter un traceback requests brut. Test ajouté
   (`test_forbidden_tier_restriction_raises_clear_error`).
-- Impact : le backtest réel est limité à la saison en cours par compétition
-  tant que le compte reste gratuit — suffisant pour valider le pipeline,
-  pas pour un backtest multi-saisons.
+- Impact : au moment de cette entrée, hypothèse initiale (limité à la
+  saison en cours). **Correction du 2026-07-26** : testé empiriquement,
+  saisons 2023/2024/2025 accessibles avec la même clé — la restriction
+  porte sur une fenêtre de plusieurs saisons récentes, pas sur "la saison
+  courante uniquement". Un backtest multi-saisons est donc possible dans
+  cette fenêtre.
 
 ## 2026-07-26 Test fragile car dépendant de l'environnement ambiant
 

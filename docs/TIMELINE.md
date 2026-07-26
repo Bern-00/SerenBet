@@ -70,6 +70,32 @@ récente en haut.
   via l'en-tête `x-requests-remaining`. Helper `odds_set_from_row` ajouté
   côté `src/betting/value_bets.py` pour brancher directement sur
   `find_value_bets`. Suite de tests : 48/48.
-- Prochaine étape : obtenir une clé Odds API (tier gratuit, 500
-  requêtes/mois), puis tester le pipeline complet (modèle → value bets) en
-  conditions réelles sur les matchs PL à venir.
+- Clé Odds API obtenue par l'utilisateur, stockée dans `engine/.env`.
+- Découverte : football-data.org tier gratuit couvre en fait plusieurs
+  saisons récentes (2023, 2024, 2025 accessibles), pas seulement la saison
+  courante comme supposé précédemment — correction de l'hypothèse notée
+  dans docs/ERRORS.md du 2026-07-26 (403 sur 2022 = limite plus ancienne,
+  pas "saison courante uniquement").
+- Constat : saison PL 2026-27 démarre le 21/08/2026 (donc aucun match
+  FINISHED sur la saison en cours) mais The Odds API a déjà des cotes de
+  pré-saison pour la 1ère journée.
+- Module `src/data/team_names.py` ajouté pour faire correspondre les noms
+  d'équipes entre football-data.org ("Arsenal FC") et The Odds API
+  ("Arsenal") sans dictionnaire figé par équipe.
+- Script `scripts/run_live_value_bets.py` : pipeline complet modèle ->
+  cotes réelles -> value bets, avec gestion explicite des équipes promues
+  inconnues du modèle (skip, pas de devinette).
+- Premier run réel : 4 value bets détectés sur 7 matchs prédictibles
+  (3 ignorés : Coventry City, Hull City, Ipswich Town — probables promus).
+  Edge le plus fort : Brentford-Tottenham +11.1%. **Analyse critique** :
+  cet edge est suspect car le modèle (entraîné sur la saison 2025-26) ne
+  sait rien du mercato estival — voir la lecture complète dans
+  docs/PLAN.md. Ne pas parier là-dessus tel quel.
+- Bug corrigé : `normalize_team_name` ratait "AFC Bournemouth" (préfixe
+  AFC non géré, seulement le suffixe) — un match légitime était ignoré à
+  tort comme "équipe inconnue". Corrigé + test de régression ajouté.
+- Suite de tests : 53/53.
+- Prochaine étape : décider si on attend quelques journées de la saison
+  2026-27 (pour ré-entraîner avec des données à jour) avant tout usage
+  réel, ou si on améliore le modèle pour pondérer saison précédente +
+  matchs déjà joués de la saison en cours.
