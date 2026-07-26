@@ -48,6 +48,31 @@ Limite connue : le tier gratuit football-data.org restreint l'accès aux
 saisons anciennes (saison courante seulement par compétition) — pas encore
 de backtest multi-saisons possible sans upgrade du plan API.
 
+## Stabilité de l'edge PL — backtest walk-forward (2026-07-26)
+
+Un seul split train/test (76 matchs de test) donne UNE mesure, pas une
+distribution. Pour répondre honnêtement à "l'edge PL est-il stable ?", la
+saison 2023-24 a été découpée en 8 fenêtres glissantes indépendantes
+(walk-forward, `rolling_backtest_football_model`) :
+
+- **8/8 fenêtres battent le baseline naïf** (100%)
+- Edge de log-loss par fenêtre : entre +0.08 et +0.28 (moyenne +0.16,
+  écart-type 0.07) — jamais négatif sur cette saison
+- Sur l'accuracy brute (pas le log-loss), l'avantage est moins net
+  fenêtre par fenêtre (ex: une fenêtre où le modèle fait 46% vs 50% pour
+  le baseline) — l'edge est surtout dans la **calibration des
+  probabilités**, pas dans le fait de deviner le bon résultat à chaque fois
+
+Limites de cette lecture, pour ne pas se raconter d'histoires :
+- Les 8 fenêtres viennent toutes de la même saison (même dynamique
+  d'équipes) — ce n'est pas 8 saisons indépendantes. "100%" = robuste sur
+  cette saison, pas une garantie perpétuelle.
+- Impossible de valider d'une saison à l'autre pour l'instant (restriction
+  tier gratuit sur les saisons anciennes, voir docs/ERRORS.md).
+- Ceci compare au baseline naïf (fréquences brutes), **pas encore aux
+  cotes réelles du marché**, qui intègrent bien plus d'information — c'est
+  l'étape suivante (Odds API).
+
 ## Choix techniques
 
 - **Python** pour tout le moteur de données/modèle : pandas, scikit-learn,

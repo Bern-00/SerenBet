@@ -54,7 +54,14 @@ récente en haut.
   ambiant de `.env`, cassait dès qu'une vraie clé était configurée — patché
   pour être indépendant de l'environnement.
 - Suite de tests : 38/38 après ces corrections.
-- Prochaine étape : décider si l'edge Premier League justifie de brancher
-  une source de cotes réelles (Odds API) pour un premier test de value bets
-  en conditions réelles — ou d'abord élargir le backtest à d'autres saisons
-  PL (si upgrade de plan API) pour confirmer la stabilité de l'edge.
+- Question posée : l'edge PL est-il stable ? Un seul split ne permet pas de
+  répondre proprement — ajout d'un backtest walk-forward
+  (`rolling_backtest_football_model` + `summarize_rolling_backtest`) qui
+  découpe la saison en fenêtres glissantes indépendantes. Résultat sur PL
+  2023-24 (8 fenêtres) : bat le baseline dans 8/8, edge log-loss entre
+  +0.08 et +0.28 (moyenne +0.16). Voir docs/PLAN.md pour la lecture
+  honnête (robuste sur cette saison, pas testable d'une saison à l'autre
+  pour l'instant, pas encore comparé aux vraies cotes marché).
+- Suite de tests : 41/41 après ajout du rolling backtest.
+- Décision utilisateur : brancher l'Odds API pour tester le comparateur de
+  value bets en conditions réelles sur Premier League.
