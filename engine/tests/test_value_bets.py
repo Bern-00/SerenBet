@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import pytest
 
+import pandas as pd
+
 from src.betting.value_bets import (
     SUSPICIOUS_EDGE_THRESHOLD,
     OddsSet,
     find_value_bets,
+    odds_set_from_row,
 )
 
 
@@ -72,3 +75,16 @@ def test_missing_model_probability_raises():
     odds = OddsSet({"home": 2.10, "draw": 3.40, "away": 3.60})
     with pytest.raises(ValueError):
         find_value_bets({"home": 0.5, "draw": 0.3}, odds)
+
+
+def test_odds_set_from_row_builds_three_way_market():
+    row = pd.Series({"odds_home": 1.80, "odds_draw": 3.60, "odds_away": 4.50})
+    odds = odds_set_from_row(row)
+    assert odds.outcomes == {"home": 1.80, "away": 4.50, "draw": 3.60}
+
+
+def test_odds_set_from_row_handles_missing_draw():
+    # Marché à 2 issues (ex NBA) : pas de colonne odds_draw significative.
+    row = pd.Series({"odds_home": 1.50, "odds_draw": float("nan"), "odds_away": 2.60})
+    odds = odds_set_from_row(row)
+    assert odds.outcomes == {"home": 1.50, "away": 2.60}

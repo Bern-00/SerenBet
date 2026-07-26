@@ -17,6 +17,7 @@ systématique et massive — les cotes intègrent déjà la marge du bookmaker
 | Ingestion stats | NBA (nba_api) | Fait — testé (mocks) |
 | Modèle probabilités | Football — Poisson attaque/défense (Maher) | Fait — backtest OK sur ligue synthétique (bat le baseline) |
 | Modèle probabilités | NBA — Elo séquentiel + avantage terrain | Fait — backtest OK sur saison synthétique (bat le baseline) |
+| Ingestion cotes | The Odds API (h2h/1X2) | Fait — testé (mocks), clé à configurer |
 | Comparateur value bet | Cotes marché → dé-vigage → edge vs modèle | Fait — testé |
 | Bankroll tracker | Kelly fractionné (1/4 par défaut) + plafond + stop-loss | Fait — testé |
 | Panneau admin | Next.js + Supabase | Reporté après validation sur données réelles |

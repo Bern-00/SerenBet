@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pandas as pd
+
 SUSPICIOUS_EDGE_THRESHOLD = 0.15
 MIN_EDGE_TO_FLAG = 0.02  # en dessous, le bruit d'estimation du modèle domine
 
@@ -84,3 +86,12 @@ def find_value_bets(
         )
 
     return sorted(results, key=lambda vb: vb.edge, reverse=True)
+
+
+def odds_set_from_row(row: pd.Series) -> OddsSet:
+    """Construit un OddsSet à partir d'une ligne du DataFrame retourné par
+    OddsApiClient.get_h2h_odds (colonnes odds_home/odds_draw/odds_away)."""
+    outcomes = {"home": row["odds_home"], "away": row["odds_away"]}
+    if pd.notna(row.get("odds_draw")):
+        outcomes["draw"] = row["odds_draw"]
+    return OddsSet(outcomes)

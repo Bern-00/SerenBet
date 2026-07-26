@@ -65,3 +65,11 @@ récente en haut.
 - Suite de tests : 41/41 après ajout du rolling backtest.
 - Décision utilisateur : brancher l'Odds API pour tester le comparateur de
   value bets en conditions réelles sur Premier League.
+- Client Odds API (`src/data/odds_api.py`) écrit et testé (mocks) : cotes
+  h2h/1X2, gestion 401/429, sélection de bookmaker, suivi du quota restant
+  via l'en-tête `x-requests-remaining`. Helper `odds_set_from_row` ajouté
+  côté `src/betting/value_bets.py` pour brancher directement sur
+  `find_value_bets`. Suite de tests : 48/48.
+- Prochaine étape : obtenir une clé Odds API (tier gratuit, 500
+  requêtes/mois), puis tester le pipeline complet (modèle → value bets) en
+  conditions réelles sur les matchs PL à venir.
