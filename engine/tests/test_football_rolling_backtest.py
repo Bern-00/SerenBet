@@ -40,3 +40,12 @@ def test_rolling_backtest_rejects_impossible_min_train_fraction():
     matches = generate_synthetic_league(n_teams=6, n_rounds=10, seed=1)
     with pytest.raises(ValueError):
         rolling_backtest_football_model(matches, n_folds=3, min_train_fraction=1.5)
+
+
+def test_rolling_backtest_accepts_half_life_days():
+    matches = generate_synthetic_league(n_teams=6, n_rounds=120, seed=5)
+    results = rolling_backtest_football_model(
+        matches, n_folds=4, min_train_fraction=0.5, half_life_days=120
+    )
+    summary = summarize_rolling_backtest(results)
+    assert summary.n_folds == len(results)

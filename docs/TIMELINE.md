@@ -99,3 +99,16 @@ récente en haut.
   2026-27 (pour ré-entraîner avec des données à jour) avant tout usage
   réel, ou si on améliore le modèle pour pondérer saison précédente +
   matchs déjà joués de la saison en cours.
+- Implémentation de la pondération temporelle (`src/models/sample_weights.py`,
+  décroissance exponentielle par ancienneté) + support dans
+  `FootballPoissonModel.fit()` et les deux backtests (`half_life_days`).
+  Mécanisme testé unitairement (fonctionne comme prévu).
+- **Validation empirique sur 3 saisons PL réelles combinées (2023-24 à
+  2025-26)** : la pondération n'apporte pas de gain mesurable en général
+  (edge quasi identique pondéré/non pondéré), et sur le cas ciblé qui nous
+  intéresse (prédire le début d'une nouvelle saison), **le modèle non
+  pondéré fait mieux que toutes les variantes pondérées testées**. Décision :
+  ne pas brancher la pondération dans le pipeline live — voir l'analyse
+  complète dans docs/PLAN.md. Le code reste disponible (testé) mais
+  non utilisé par défaut.
+- Suite de tests : 62/62.

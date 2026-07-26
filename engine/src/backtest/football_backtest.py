@@ -14,12 +14,14 @@ l'edge tient sur plusieurs sous-périodes ou si c'est un artefact du split.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import log_loss
 
 from ..models.football_poisson import FootballPoissonModel
+from ..models.sample_weights import compute_recency_weights
 
 OUTCOME_LABELS = ["home", "draw", "away"]
 
@@ -54,7 +56,11 @@ def time_split(matches: pd.DataFrame, test_fraction: float = 0.2) -> tuple[pd.Da
     return sorted_matches.iloc[:split_idx], sorted_matches.iloc[split_idx:]
 
 
-def _evaluate_split(train: pd.DataFrame, test: pd.DataFrame) -> BacktestResult:
+def _evaluate_split(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    half_life_days: Optional[float] = None,
+) -> BacktestResult:
     if train.empty or test.empty:
         raise ValueError("Pas assez de matchs pour découper en train/test.")
 
@@ -63,7 +69,15 @@ def _evaluate_split(train: pd.DataFrame, test: pd.DataFrame) -> BacktestResult:
     if test.empty:
         raise ValueError("Aucun match de test avec des équipes connues à l'entraînement.")
 
-    model = FootballPoissonModel().fit(train)
+    if half_life_days is not None:
+        # Référence = dernier match connu du train, pour reproduire fidèlement
+        # l'usage réel (on prédit "juste après" la fin des données d'entraînement).
+        weights = compute_recency_weights(
+            train["utc_date"], half_life_days=half_life_days, reference_date=train["utc_date"].max()
+        )
+        model = FootballPoissonModel().fit(train, weights=weights)
+    else:
+        model = FootballPoissonModel().fit(train)
 
     outcomes = test.apply(_match_outcome, axis=1)
     label_to_idx = {label: i for i, label in enumerate(OUTCOME_LABELS)}
@@ -97,15 +111,23 @@ def _evaluate_split(train: pd.DataFrame, test: pd.DataFrame) -> BacktestResult:
     )
 
 
-def backtest_football_model(matches: pd.DataFrame, test_fraction: float = 0.2) -> BacktestResult:
+def backtest_football_model(
+    matches: pd.DataFrame,
+    test_fraction: float = 0.2,
+    half_life_days: Optional[float] = None,
+) -> BacktestResult:
+    """half_life_days : si fourni, pondère les matchs d'entraînement par
+    ancienneté (voir src/models/sample_weights.py) au lieu de les compter
+    également. None = comportement d'origine (pondération uniforme)."""
     train, test = time_split(matches, test_fraction)
-    return _evaluate_split(train, test)
+    return _evaluate_split(train, test, half_life_days=half_life_days)
 
 
 def rolling_backtest_football_model(
     matches: pd.DataFrame,
     n_folds: int = 5,
     min_train_fraction: float = 0.5,
+    half_life_days: Optional[float] = None,
 ) -> list[BacktestResult]:
     """Walk-forward : la saison est découpée en n_folds fenêtres de test
     successives, chacune entraînée uniquement sur ce qui la précède
@@ -128,7 +150,7 @@ def rolling_backtest_football_model(
         train = sorted_matches.iloc[:train_end]
         test = sorted_matches.iloc[train_end:test_end]
         try:
-            results.append(_evaluate_split(train, test))
+            results.append(_evaluate_split(train, test, half_life_days=half_life_days))
         except ValueError:
             continue
 

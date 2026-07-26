@@ -12,6 +12,7 @@ backtest (voir src/backtest/football_backtest.py) avant tout usage réel.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -46,32 +47,46 @@ class FootballPoissonModel:
         self._glm_result = None
         self._teams: set[str] = set()
 
-    def fit(self, matches: pd.DataFrame) -> "FootballPoissonModel":
+    def fit(
+        self,
+        matches: pd.DataFrame,
+        weights: Optional[pd.Series] = None,
+    ) -> "FootballPoissonModel":
+        """weights : poids optionnel par match (même index que `matches`),
+        ex. sortie de src/models/sample_weights.compute_recency_weights.
+        Sans poids, tous les matchs comptent également (comportement
+        d'origine)."""
         missing = REQUIRED_COLUMNS - set(matches.columns)
         if missing:
             raise ValueError(f"Colonnes manquantes pour l'entraînement: {missing}")
         if matches.empty:
             raise ValueError("Impossible d'entraîner sur un DataFrame vide.")
+        if weights is not None and len(weights) != len(matches):
+            raise ValueError("weights doit avoir la même longueur que matches.")
 
-        long_df = self._to_long_format(matches)
+        long_df = self._to_long_format(matches, weights)
         self._teams = set(matches["home_team"]).union(matches["away_team"])
 
         model = smf.glm(
             formula="goals ~ is_home + team + opponent",
             data=long_df,
             family=sm.families.Poisson(),
+            freq_weights=long_df["weight"],
         )
         self._glm_result = model.fit()
         return self
 
     @staticmethod
-    def _to_long_format(matches: pd.DataFrame) -> pd.DataFrame:
+    def _to_long_format(matches: pd.DataFrame, weights: Optional[pd.Series] = None) -> pd.DataFrame:
+        match_weights = weights.to_numpy() if weights is not None else np.ones(len(matches))
+
         home_rows = pd.DataFrame(
             {
                 "team": matches["home_team"],
                 "opponent": matches["away_team"],
                 "goals": matches["home_goals"],
                 "is_home": 1,
+                "weight": match_weights,
             }
         )
         away_rows = pd.DataFrame(
@@ -80,6 +95,7 @@ class FootballPoissonModel:
                 "opponent": matches["home_team"],
                 "goals": matches["away_goals"],
                 "is_home": 0,
+                "weight": match_weights,
             }
         )
         return pd.concat([home_rows, away_rows], ignore_index=True)

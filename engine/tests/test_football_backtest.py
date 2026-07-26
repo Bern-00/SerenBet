@@ -27,3 +27,11 @@ def test_backtest_raises_on_too_few_matches():
     matches = generate_synthetic_league(n_teams=6, n_rounds=1, seed=1)
     with pytest.raises(ValueError):
         backtest_football_model(matches, test_fraction=0.9)
+
+
+def test_backtest_with_recency_weighting_still_runs_and_beats_baseline():
+    matches = generate_synthetic_league(n_teams=6, n_rounds=40, seed=7)
+    result = backtest_football_model(matches, test_fraction=0.2, half_life_days=90)
+
+    assert result.n_test_matches > 0
+    assert result.beats_baseline

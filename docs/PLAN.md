@@ -108,6 +108,39 @@ suffixes de club ("Arsenal FC" -> "arsenal") mais pas les préfixes
 (Manchester City vs Bournemouth) était ignoré à tort comme "équipe
 inconnue". Corrigé en retirant les tokens FC/AFC/CF où qu'ils apparaissent.
 
+## Hypothèse testée et infirmée : pondération temporelle (recency weighting)
+
+Idée testée : pour corriger le problème ci-dessus (modèle entraîné sur la
+saison passée qui ignore le mercato), pondérer les matchs d'entraînement
+par ancienneté (décroissance exponentielle, `src/models/sample_weights.py`)
+pour que les matchs récents comptent plus que les anciens. Mécanisme
+implémenté et testé unitairement (fonctionne comme prévu : un signal
+récent contradictoire l'emporte bien sur un signal ancien).
+
+**Testé empiriquement sur les 3 saisons PL réelles (2023-24 à 2025-26),
+résultat : ça n'aide pas.**
+
+- Backtest walk-forward général (8 fenêtres sur 2 saisons de test) :
+  edge quasi identique pondéré vs non pondéré (+0.075 à +0.077 de
+  log-loss selon la demi-vie, contre +0.076 non pondéré) — différences
+  dans le bruit statistique (std ~0.035-0.039).
+- Test ciblé sur le cas qui nous intéresse vraiment (prédire les tout
+  premiers matchs d'une nouvelle saison à partir de la précédente) :
+  **le modèle non pondéré fait mieux que toutes les variantes pondérées**
+  sur les deux transitions de saison testées (2023->2024 : edge +0.208
+  non pondéré vs +0.133 à +0.192 pondéré ; 2024->2025 : edge +0.136 non
+  pondéré vs +0.067 à +0.131 pondéré).
+
+Conclusion : la pondération temporelle ne résout pas le problème du
+mercato estival — elle est gardée dans le code (testée, réutilisable) mais
+**non branchée** dans `scripts/run_live_value_bets.py`. Le vrai correctif
+pour le "blind spot" de saison reste ce qui était déjà recommandé :
+attendre quelques journées de la nouvelle saison avant de faire confiance
+aux prédictions, plutôt que rafistoler avec une pondération qui n'apporte
+rien mesurable ici. Leçon générale : une idée plausible et bien testée
+unitairement peut quand même échouer le test empirique — ne pas l'adopter
+juste parce qu'elle est intuitive.
+
 ## Choix techniques
 
 - **Python** pour tout le moteur de données/modèle : pandas, scikit-learn,
