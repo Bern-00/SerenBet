@@ -53,6 +53,13 @@ class FootballDataClient:
                 "Rate limit football-data.org atteint (429). Réessaie dans "
                 "quelques minutes."
             )
+        if response.status_code == 403:
+            raise FootballDataError(
+                "Accès refusé (403) par football-data.org — probablement une "
+                "restriction du tier gratuit (compétition ou saison hors du "
+                "champ autorisé par ta clé, souvent limité à la saison en "
+                "cours). Vérifie ton plan sur football-data.org/client/register."
+            )
         response.raise_for_status()
         return response.json()
 

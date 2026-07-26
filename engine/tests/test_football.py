@@ -31,8 +31,11 @@ SAMPLE_RESPONSE = {
 
 
 def test_missing_api_key_raises():
-    with pytest.raises(FootballDataError):
-        FootballDataClient(api_key="")
+    # Patch le fallback module-level : ce test doit rester vrai même si un
+    # vrai FOOTBALL_DATA_API_KEY est configuré dans l'environnement (.env).
+    with patch("src.data.football.FOOTBALL_DATA_API_KEY", ""):
+        with pytest.raises(FootballDataError):
+            FootballDataClient(api_key="")
 
 
 def test_get_finished_matches_parses_and_filters_unplayed():
@@ -74,3 +77,16 @@ def test_rate_limit_raises_football_data_error():
          patch("src.data.football.time.sleep"):
         with pytest.raises(FootballDataError):
             client.get_finished_matches("PL")
+
+
+def test_forbidden_tier_restriction_raises_clear_error():
+    client = FootballDataClient(api_key="fake-key-for-tests")
+    client._last_request_at = 0.0
+
+    mock_response = MagicMock()
+    mock_response.status_code = 403
+
+    with patch("src.data.football.requests.get", return_value=mock_response), \
+         patch("src.data.football.time.sleep"):
+        with pytest.raises(FootballDataError, match="tier gratuit"):
+            client.get_finished_matches("PL", season=2015)

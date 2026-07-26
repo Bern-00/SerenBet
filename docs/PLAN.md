@@ -21,11 +21,32 @@ systématique et massive — les cotes intègrent déjà la marge du bookmaker
 | Bankroll tracker | Kelly fractionné (1/4 par défaut) + plafond + stop-loss | Fait — testé |
 | Panneau admin | Next.js + Supabase | Reporté après validation sur données réelles |
 
-Note : les backtests ci-dessus tournent sur des ligues **synthétiques**
+Note : les backtests unitaires tournent sur des ligues **synthétiques**
 (forces d'équipes connues, générées par le test) — ça valide que le pipeline
-calcule bien ce qu'il est censé calculer. Ça ne valide PAS encore que le
-modèle bat le marché réel. Prochaine étape avant tout usage réel : backtest
-sur données historiques réelles (football-data.org / nba_api).
+calcule bien ce qu'il est censé calculer, pas qu'il bat le marché réel.
+
+## Backtests sur données réelles (2026-07-26)
+
+| Compétition | Saison | Log-loss modèle | Log-loss baseline | Accuracy modèle | Accuracy baseline | Bat le baseline |
+|---|---|---|---|---|---|---|
+| Premier League (PL) | 2023-24 | 0.914 | 1.048 | 56.6% | 44.7% | Oui, marge nette |
+| Serie A (SA) | 2023-24 | 1.121 | 1.127 | 43.4% | 32.9% | Oui, marge faible |
+
+Lecture honnête de ces chiffres : le modèle apporte un edge réel mais
+**modeste et variable selon la ligue** — exactement ce qui était attendu
+(voir l'avertissement sur le 98% en tête de ce document). Serie A montre un
+edge de log-loss quasi nul : pas encore de quoi comparer aux cotes du
+marché sur cette ligue avec confiance. Premier League est plus prometteur.
+
+Backtest NBA sur données réelles **bloqué** dans cet environnement
+d'exécution : `stats.nba.com` ne répond pas depuis cette machine/IP
+(protection anti-bot, voir docs/ERRORS.md). Le modèle Elo reste validé sur
+données synthétiques ; à relancer (`engine/scripts/run_nba_backtest.py`)
+depuis un réseau non bloqué avant de faire confiance aux chiffres NBA réels.
+
+Limite connue : le tier gratuit football-data.org restreint l'accès aux
+saisons anciennes (saison courante seulement par compétition) — pas encore
+de backtest multi-saisons possible sans upgrade du plan API.
 
 ## Choix techniques
 
