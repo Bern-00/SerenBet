@@ -71,6 +71,20 @@ def test_huge_edge_is_flagged_as_suspicious():
     assert value_bets[0].is_suspicious
 
 
+def test_positive_edge_but_negative_ev_is_excluded():
+    # Cas réel rencontré en prod (Nottingham Forest vs Leeds United,
+    # PL 2026-27) : edge positif (+2.2%) contre la ligne dé-vigée, mais EV
+    # négatif (-1.3%) contre la cote réelle du bookmaker une fois sa marge
+    # prise en compte. Un tel pari ne doit jamais être remonté comme
+    # "value bet" — sinon l'outil recommande un pari perdant en espérance.
+    odds = OddsSet({"home": 2.15, "draw": 3.50, "away": 3.20})
+    model_probs = {"home": 0.459, "draw": 0.257, "away": 0.284}
+
+    value_bets = find_value_bets(model_probs, odds)
+
+    assert value_bets == []
+
+
 def test_missing_model_probability_raises():
     odds = OddsSet({"home": 2.10, "draw": 3.40, "away": 3.60})
     with pytest.raises(ValueError):

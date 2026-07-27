@@ -49,6 +49,27 @@ ne pas répéter les mêmes problèmes.
   compliqué le débogage plus tard et qui viole le principe "ne pas
   masquer les erreurs avec des assertions non-null").
 
+## 2026-07-26 find_value_bets pouvait remonter un pari EV négatif
+
+- Symptôme : en préparant des données réelles pour le panneau admin, un
+  des 4 "value bets" du run PL (Nottingham Forest vs Leeds United) avait
+  un edge positif (+2.2%) mais un `expected_value` négatif (-1.3%).
+- Cause : `edge` est calculé contre la ligne de marché DÉ-VIGÉE (fair
+  probability), mais `expected_value` est calculé contre la COTE RÉELLE
+  du bookmaker (qui inclut sa marge). Le filtre de `find_value_bets` ne
+  vérifiait que `edge >= min_edge`, jamais le signe de `expected_value` —
+  un edge positif sur la ligne théorique peut donc rester EV négatif une
+  fois la vraie marge du bookmaker appliquée. Concrètement : recommander
+  un pari qui est perdant en espérance, à l'exact opposé de la raison
+  d'être de l'outil.
+- Correction : `find_value_bets` (src/betting/value_bets.py) exige
+  maintenant `expected_value > 0` en plus de `edge >= min_edge`. Test de
+  régression ajouté avec les chiffres réels du cas rencontré
+  (`test_positive_edge_but_negative_ev_is_excluded`).
+- Impact si non corrigé : l'outil aurait pu recommander de vrais paris à
+  EV négatif au moment de brancher de l'argent réel — le genre d'erreur
+  silencieuse la plus dangereuse pour ce projet précisément.
+
 Format d'une entrée :
 
 ```

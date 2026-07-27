@@ -8,6 +8,7 @@ import {
   type Settings,
   type ValueBet,
 } from "@/lib/types";
+import { seedRealResults } from "./actions";
 
 export default async function AdminOverviewPage() {
   const { supabase, user } = await requireUser();
@@ -49,10 +50,32 @@ export default async function AdminOverviewPage() {
     lastBacktest?.baseline_log_loss != null && lastBacktest?.model_log_loss != null
       ? lastBacktest.baseline_log_loss - lastBacktest.model_log_loss
       : null;
+  const noDataYet = !lastBacktest && valueBets.length === 0;
 
   return (
     <div>
       <PageHeader eyebrow="Tableau de bord" title="Vue d'ensemble" />
+
+      {noDataYet && (
+        <Card className="mb-8 p-5">
+          <h2 className="text-sm font-semibold">Panneau vide pour l&apos;instant</h2>
+          <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
+            Le moteur Python n&apos;écrit pas encore automatiquement dans Supabase.
+            Charge les vrais résultats déjà calculés (backtests PL 2023-24, value
+            bets détectés sur les cotes réelles) pour tester le panneau avec de
+            vraies données en attendant la synchronisation automatique.
+          </p>
+          <form action={seedRealResults} className="mt-4">
+            <button
+              type="submit"
+              className="rounded-md px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90"
+              style={{ background: "var(--color-amber)", color: "var(--color-ground)" }}
+            >
+              Charger les résultats réels
+            </button>
+          </form>
+        </Card>
+      )}
 
       <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Bankroll" value={`${currentBankroll.toFixed(2)}€`} />

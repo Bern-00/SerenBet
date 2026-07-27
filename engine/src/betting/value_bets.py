@@ -74,6 +74,15 @@ def find_value_bets(
             continue
 
         bet_odds = odds.outcomes[outcome]
+        expected_value = model_prob * bet_odds - 1.0
+        # `edge` compare le modèle à la ligne DÉ-VIGÉE ; `expected_value`
+        # compare au COTE RÉELLE du bookmaker (avec sa marge). Un edge positif
+        # sur la ligne théorique peut donc rester EV négatif une fois la vraie
+        # marge appliquée — ne jamais remonter un pari qui n'est pas
+        # réellement rentable en espérance, même s'il passe le seuil d'edge.
+        if expected_value <= 0:
+            continue
+
         results.append(
             ValueBet(
                 outcome=outcome,
@@ -81,7 +90,7 @@ def find_value_bets(
                 model_probability=model_prob,
                 market_fair_probability=market_prob,
                 edge=edge,
-                expected_value=model_prob * bet_odds - 1.0,
+                expected_value=expected_value,
             )
         )
 
