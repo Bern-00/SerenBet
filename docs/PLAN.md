@@ -20,7 +20,7 @@ systématique et massive — les cotes intègrent déjà la marge du bookmaker
 | Ingestion cotes | The Odds API (h2h/1X2) | Fait — testé, clé configurée, pipeline live validé |
 | Comparateur value bet | Cotes marché → dé-vigage → edge vs modèle | Fait — testé |
 | Bankroll tracker | Kelly fractionné (1/4 par défaut) + plafond + stop-loss | Fait — testé |
-| Panneau admin | Next.js + Supabase | Reporté après validation sur données réelles |
+| Panneau admin | Next.js 16 + Supabase | Fait — auth, 5 pages, Server Actions réelles, RLS |
 
 Note : les backtests unitaires tournent sur des ligues **synthétiques**
 (forces d'équipes connues, générées par le test) — ça valide que le pipeline

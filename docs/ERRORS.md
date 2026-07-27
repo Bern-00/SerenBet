@@ -3,6 +3,52 @@
 Journal des erreurs rencontrées, causes et corrections. Sert de mémoire pour
 ne pas répéter les mêmes problèmes.
 
+## 2026-07-26 Vulnérabilités npm (web/) — pas de correctif amont disponible
+
+- Symptôme : `npm audit` sur `web/` (Next.js 16.2.12 fraîchement scaffoldé)
+  remonte 12 vulnérabilités "high" : `postcss@8.4.31` et `sharp@0.34.5`
+  (dépendances internes empaquetées PAR next lui-même, pas dans notre
+  `package.json`), plus `brace-expansion` via la chaîne eslint.
+- Vérifié : `16.2.12` est déjà la dernière version de Next.js publiée
+  (`npm view next version`). `npm audit fix --force` propose de
+  redescendre vers `next@9.3.3` (~2020, avant l'App Router) — une
+  régression absurde, pas un correctif.
+- Décision : ne pas appliquer `--force`. Risque réel évalué comme faible
+  pour l'usage actuel :
+  - `postcss` (XSS/lecture de fichier via `sourceMappingURL`) : n'affecte
+    que le traitement de CSS non fiable — on ne traite que notre propre
+    CSS, pas d'upload/CSS utilisateur.
+  - `sharp`/libvips (CVEs image) : n'affecte que le traitement d'images
+    non fiables via `next/image` — pas encore de upload d'image
+    utilisateur dans l'app. **À réévaluer avant d'ajouter une feature
+    d'upload d'image (avatars, logos d'équipe, etc.).**
+  - `brace-expansion` (DoS regex) : uniquement dans la chaîne eslint
+    (outillage de dev, jamais exécuté en prod/runtime utilisateur).
+- Action de suivi : relancer `npm audit` après chaque mise à jour de
+  Next.js ; upgrader dès qu'un patch amont est disponible.
+
+## 2026-07-26 Crash sur `user!.id` malgré le layout protégé
+
+- Symptôme : en dev, visiter une page `/admin/*` sans être authentifié
+  affichait bien la redirection finale vers `/login`, mais le serveur
+  loggait `TypeError: Cannot read properties of null (reading 'id')`
+  avant la redirection — repéré via les logs `npm run dev`, pas juste par
+  le code HTTP final (qui restait 307 et masquait le problème).
+- Cause : chaque page admin faisait son propre appel
+  `supabase.auth.getUser()` et utilisait `user!.id` (assertion non-null),
+  en supposant que le `redirect()` du layout parent (`admin/layout.tsx`)
+  garantissait un utilisateur non-null. Mais Next.js peut lancer le
+  data-fetching d'une page avant que le redirect du layout ait pris effet
+  — le composant page s'exécute quand même avec `user === null`.
+- Correction : `src/lib/supabase/require-user.ts` — un helper
+  `requireUser()` qui vérifie l'utilisateur ET redirige lui-même,
+  utilisé dans CHAQUE page/layout admin au lieu de faire confiance au
+  layout parent. Plus aucune assertion `user!.id` dans le code.
+- Impact si non corrigé : erreur serveur systématique (loggée, invisible
+  côté utilisateur grâce au redirect final, mais un vrai bug qui aurait
+  compliqué le débogage plus tard et qui viole le principe "ne pas
+  masquer les erreurs avec des assertions non-null").
+
 Format d'une entrée :
 
 ```

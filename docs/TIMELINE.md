@@ -112,3 +112,47 @@ récente en haut.
   complète dans docs/PLAN.md. Le code reste disponible (testé) mais
   non utilisé par défaut.
 - Suite de tests : 62/62.
+
+## 2026-07-26 (suite) — Panneau admin + site web (Next.js 16 + Supabase)
+
+- Direction de marque validée par maquette (Artifact) : thème "terminal
+  calme, pas casino" — courbe de probabilité (bleu) vs ligne de marché
+  (pointillé gris) vs edge détecté (ambre). Logo = ce concept en mark
+  géométrique, pas une icône de dé/trophée. Palette et typographie
+  (grotesk + monospace pour les données) documentées dans la maquette.
+- Scaffolding `web/` : Next.js 16.2.12 (App Router, Turbopack, Tailwind
+  v4). Next 16 introduit des changements par rapport aux conventions
+  connues : `middleware.ts` renommé `proxy.ts` (export `proxy` au lieu de
+  `middleware`), `params`/`cookies()`/`headers()` strictement asynchrones
+  — vérifié dans la doc embarquée (`node_modules/next/dist/docs`) avant
+  d'écrire le code, comme le recommande le `AGENTS.md` auto-généré par
+  create-next-app.
+- Supabase branché : `@supabase/ssr` (client browser + server + proxy
+  pour le refresh de session), URL et clé publishable de l'utilisateur
+  stockées dans `web/.env.local` (jamais commité).
+- Schéma DB (`supabase/schema.sql`) : `settings`, `bankroll_events`,
+  `value_bets`, `backtest_runs` — RLS activée dès la création, scoping par
+  `auth.uid()`. À exécuter manuellement par l'utilisateur dans le SQL
+  Editor Supabase (on n'a que la clé publique, pas de quoi exécuter du
+  DDL à distance).
+- Panneau admin : auth email/mot de passe, layout protégé, 5 pages (Vue
+  d'ensemble, Value bets, Bankroll, Backtests, Réglages) avec vraies
+  Server Actions (pas de mock) branchées sur Supabase.
+- Bug trouvé et corrigé : chaque page admin utilisait `user!.id` en
+  supposant que le layout parent garantissait un utilisateur authentifié,
+  mais Next.js peut lancer le data-fetching d'une page avant que le
+  redirect du layout prenne effet -> crash serveur silencieux (masqué par
+  la redirection finale). Corrigé avec un helper `requireUser()` utilisé
+  partout. Voir docs/ERRORS.md.
+- Vérifications : `tsc --noEmit` propre, `eslint` propre, `next build`
+  propre (7 routes), testé en dev que toutes les routes `/admin/*`
+  redirigent proprement (307) sans authentification, sans erreur serveur.
+- npm audit : 12 vulnérabilités high dans les dépendances internes de
+  Next.js lui-même (postcss/sharp, déjà sur la dernière version) + chaîne
+  eslint (dev uniquement) — pas de correctif amont disponible, décision
+  de ne pas downgrader documentée dans docs/ERRORS.md.
+- Prochaine étape : l'utilisateur exécute `supabase/schema.sql`, crée son
+  compte via `/login`, teste le panneau en conditions réelles. Plus tard :
+  synchroniser le moteur Python (backtests, value bets) vers Supabase
+  pour peupler les tables automatiquement (nécessitera la clé
+  service_role, pas encore fournie).
