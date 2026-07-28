@@ -60,6 +60,85 @@ export type BacktestRun = {
   created_at: string;
 };
 
+// ---------------------------------------------------------------------------
+// Dashboard Parieur types
+// ---------------------------------------------------------------------------
+
+export type MatchOutcomeProbabilities = {
+  home: number; // probabilité victoire domicile (modèle)
+  draw: number; // probabilité match nul (modèle)
+  away: number; // probabilité victoire extérieur (modèle)
+};
+
+export type MarketOdds = {
+  home: number; // cote 1 du marché
+  draw: number; // cote X du marché
+  away: number; // cote 2 du marché
+};
+
+export type ConfidenceLevel = "high" | "medium" | "low";
+
+export type DetailedMatchStatsRates = {
+  lambda_goals_home: number;
+  lambda_goals_away: number;
+  lambda_corners_home: number;
+  lambda_corners_away: number;
+  lambda_cards_home: number;
+  lambda_cards_away: number;
+  lambda_fouls_home: number;
+  lambda_fouls_away: number;
+  lambda_shots_home: number;
+  lambda_shots_away: number;
+  lambda_sot_home: number;
+  lambda_sot_away: number;
+  lambda_offsides_home: number;
+  lambda_offsides_away: number;
+};
+
+export type UpcomingMatch = {
+  id: string;
+  sport: string;
+  competition: string;
+  home_team: string;
+  away_team: string;
+  commence_time: string; // ISO date string
+  model_probs: MatchOutcomeProbabilities;
+  market_odds: MarketOdds;
+  best_bookmaker: string;
+  // Meilleur outcome détecté
+  best_outcome: "home" | "draw" | "away" | null;
+  best_edge: number | null; // edge en points de %
+  best_ev: number | null; // expected value
+  is_demo: boolean; // données illustratives ou vraies
+  stat_rates?: DetailedMatchStatsRates;
+};
+
+export type MarketCategory = "1X2" | "goals" | "corners" | "cards" | "fouls" | "shots" | "offsides";
+
+export type BettingPick = {
+  id: string;
+  match_id: string;
+  home_team: string;
+  away_team: string;
+  competition: string;
+  sport: string;
+  commence_time: string;
+  market_type?: MarketCategory;
+  outcome: "home" | "draw" | "away" | string;
+  outcome_label: string; // ex: "Arsenal gagne", "Plus de 9.5 Corners", "Plus de 3.5 Cartons"
+  odds: number;
+  model_probability: number;
+  market_probability: number;
+  edge: number; // en décimal (0.08 = 8pp)
+  expected_value: number; // en décimal (0.06 = +6%)
+  confidence: ConfidenceLevel;
+  kelly_fraction: number; // fraction Kelly recommandée (0.02 = 2%)
+  kelly_stake_euros: number; // mise recommandée en €
+  bookmaker: string;
+  is_suspicious: boolean;
+  is_demo: boolean;
+};
+
 export const DEFAULT_SETTINGS: Pick<
   Settings,
   "starting_bankroll" | "kelly_multiplier" | "max_stake_fraction" | "stop_loss_fraction"

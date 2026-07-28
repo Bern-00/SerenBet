@@ -30,4 +30,6 @@ Thumbs.db
 .vscode/
 
 # Claude Code (config locale, propre à la machine)
+.claude/
 .claude/settings.local.json
+

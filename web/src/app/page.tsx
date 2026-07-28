@@ -23,16 +23,26 @@ export default function HomePage() {
           de pourcentage — le calme, en continu.
         </p>
 
-        <div className="mt-9">
+        <div className="mt-9 flex flex-wrap items-center gap-3">
           <Link
-            href="/admin"
-            className="inline-flex items-center gap-2 rounded-md px-5 py-2.5 text-sm font-semibold transition-colors"
+            href="/dashboard"
+            className="inline-flex items-center gap-2 rounded-md px-5 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90"
             style={{
               background: "var(--color-amber)",
               color: "var(--color-ground)",
             }}
           >
-            Accéder au panneau admin
+            Dashboard Parieur →
+          </Link>
+          <Link
+            href="/admin"
+            className="inline-flex items-center gap-2 rounded-md border px-5 py-2.5 text-sm font-semibold transition-colors hover:opacity-80"
+            style={{
+              borderColor: "var(--color-border)",
+              color: "var(--color-muted)",
+            }}
+          >
+            Panneau admin
           </Link>
         </div>
       </main>
