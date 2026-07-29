@@ -7,12 +7,11 @@ import { GeminiFactCheckBadge } from "@/components/gemini-fact-check-badge";
 import { DateFilterBar, type DateFilterOption } from "@/components/date-filter-bar";
 import { DEMO_PICKS } from "@/lib/demo-data";
 import { computeFullMarketPanoply } from "@/lib/statistical-model";
-import type { BettingPick, MarketCategory, ConfidenceLevel } from "@/lib/types";
+import type { BettingPick, MarketCategory } from "@/lib/types";
 import Link from "next/link";
 
 type LiveMatch = {
   id: string;
-  sofascore_id: number;
   sport: string;
   competition: string;
   home_team: string;
@@ -160,7 +159,6 @@ function SuggestionRow({
               <span>Bookmaker : {pick.bookmaker}</span>
             </div>
 
-            {/* Fact-Checking IA Gemini Badge */}
             <div className="mt-2.5">
               <GeminiFactCheckBadge
                 homeTeam={pick.home_team}
@@ -177,7 +175,6 @@ function SuggestionRow({
         </div>
       </div>
 
-      {/* Métriques compactes */}
       <div className="mt-3 flex flex-wrap items-center gap-4 pl-10">
         <div className="text-[11px]">
           <span style={{ color: "var(--color-muted)" }}>Edge </span>
@@ -249,83 +246,94 @@ export default function SuggestionsPage() {
       const extracted: BettingPick[] = [];
 
       for (const m of matches) {
-        // 1. Value bets 1X2 réels s'il y a des cotes
-        if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev > 0.02) {
+        // 1. Value bets 1X2 réels
+        if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
           const mktOdd = m.market_odds[m.best_outcome];
           const modelP = m.model_probs[m.best_outcome];
-          const implP = 1 / mktOdd;
-          const edge = modelP - implP;
-          const label = m.best_outcome === "home" ? `${m.home_team} gagne` : m.best_outcome === "away" ? `${m.away_team} gagne` : "Match nul";
-          const kellyRaw = edge / (mktOdd - 1);
-          const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.05);
 
-          extracted.push({
-            id: `live-${m.id}-1x2`,
-            match_id: m.id,
-            home_team: m.home_team,
-            away_team: m.away_team,
-            competition: m.competition,
-            sport: m.sport,
-            commence_time: m.commence_time,
-            market_type: "1X2",
-            outcome: m.best_outcome,
-            outcome_label: label,
-            odds: mktOdd,
-            model_probability: modelP,
-            market_probability: implP,
-            edge,
-            expected_value: m.best_ev,
-            confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
-            kelly_fraction: kelly,
-            kelly_stake_euros: Math.round(bankroll * kelly),
-            bookmaker: m.best_bookmaker ?? "OddsAPI",
-            is_suspicious: false,
-            is_demo: false,
-          });
-        }
-
-        // 2. Panoplie statistique Poisson (Corners, Cartons, Buts)
-        if (m.stat_rates) {
-          const panoply = computeFullMarketPanoply(m.stat_rates);
-          const topStatMarkets = [
-            ...panoply.goals.filter(item => item.modelProb > 0.60),
-            ...panoply.corners.filter(item => item.modelProb > 0.60),
-            ...panoply.cards.filter(item => item.modelProb > 0.62),
-            ...panoply.shots.filter(item => item.modelProb > 0.62),
-          ];
-
-          for (const item of topStatMarkets) {
-            const fairOdds = item.fairOdds;
-            const marketOdds = parseFloat((fairOdds * 1.08).toFixed(2)); // cote estimée marché
-            const implP = 1 / marketOdds;
-            const edge = item.modelProb - implP;
-            const ev = item.modelProb * marketOdds - 1;
-            const kellyRaw = edge / (marketOdds - 1);
-            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.04);
+          // Filtre de rigueur : cote entre 1.35 et 4.50 max, probabilité >= 22%
+          if (mktOdd >= 1.35 && mktOdd <= 4.50 && modelP >= 0.22) {
+            const implP = 1 / mktOdd;
+            const edge = modelP - implP;
+            const label = m.best_outcome === "home" ? `${m.home_team} gagne` : m.best_outcome === "away" ? `${m.away_team} gagne` : "Match nul";
+            const kellyRaw = edge / (mktOdd - 1);
+            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03); // Max 3%
 
             extracted.push({
-              id: `live-${m.id}-${item.category}-${item.selection}`,
+              id: `live-${m.id}-1x2`,
               match_id: m.id,
               home_team: m.home_team,
               away_team: m.away_team,
               competition: m.competition,
               sport: m.sport,
               commence_time: m.commence_time,
-              market_type: item.category as MarketCategory,
-              outcome: item.selection,
-              outcome_label: item.selection,
-              odds: marketOdds,
-              model_probability: item.modelProb,
+              market_type: "1X2",
+              outcome: m.best_outcome,
+              outcome_label: label,
+              odds: mktOdd,
+              model_probability: modelP,
               market_probability: implP,
               edge,
-              expected_value: Math.max(ev, 0.03),
-              confidence: item.modelProb >= 0.66 ? "high" : "medium",
+              expected_value: m.best_ev,
+              confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
               kelly_fraction: kelly,
               kelly_stake_euros: Math.round(bankroll * kelly),
-              bookmaker: "SofaScore Quant",
+              bookmaker: m.best_bookmaker ?? "OddsAPI",
               is_suspicious: false,
               is_demo: false,
             });
+          }
+        }
+
+        // 2. Panoplie statistique Poisson (Filtres de rigueur : proba >= 58%, cotes <= 3.50)
+        if (m.stat_rates) {
+          const panoply = computeFullMarketPanoply(m.stat_rates);
+          const candidateMarkets = [
+            ...panoply.goals,
+            ...panoply.corners,
+            ...panoply.cards,
+            ...panoply.shots,
+          ];
+
+          for (const item of candidateMarkets) {
+            // Uniquement si probabilité entre 58% et 88% et fair odds entre 1.30 et 3.20
+            if (item.modelProb >= 0.58 && item.modelProb <= 0.88 && item.fairOdds >= 1.25 && item.fairOdds <= 3.20) {
+              const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
+              if (marketOdds < 1.35 || marketOdds > 4.20) continue;
+
+              const implP = 1 / marketOdds;
+              const edge = item.modelProb - implP;
+              const ev = item.modelProb * marketOdds - 1;
+
+              if (ev < 0.02 || ev > 0.20) continue;
+
+              const kellyRaw = edge / (marketOdds - 1);
+              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+
+              extracted.push({
+                id: `live-${m.id}-${item.category}-${item.selection}`,
+                match_id: m.id,
+                home_team: m.home_team,
+                away_team: m.away_team,
+                competition: m.competition,
+                sport: m.sport,
+                commence_time: m.commence_time,
+                market_type: item.category as MarketCategory,
+                outcome: item.selection,
+                outcome_label: item.selection,
+                odds: marketOdds,
+                model_probability: item.modelProb,
+                market_probability: implP,
+                edge,
+                expected_value: parseFloat(ev.toFixed(4)),
+                confidence: item.modelProb >= 0.66 ? "high" : "medium",
+                kelly_fraction: kelly,
+                kelly_stake_euros: Math.round(bankroll * kelly),
+                bookmaker: "SofaScore Quant",
+                is_suspicious: false,
+                is_demo: false,
+              });
+            }
           }
         }
       }
@@ -377,7 +385,7 @@ export default function SuggestionsPage() {
   }
 
   const actionable = filteredPicks
-    .filter((p) => !p.is_suspicious)
+    .filter((p) => !p.is_suspicious && p.odds >= 1.35 && p.odds <= 4.50)
     .sort((a, b) => b.expected_value - a.expected_value);
 
   const totalStake = actionable.reduce(
@@ -395,11 +403,11 @@ export default function SuggestionsPage() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <PageHeader
-            eyebrow="Live SofaScore + Fact-Checking Gemini IA"
-            title="Panoplie de Paris & Validation IA"
+            eyebrow="Rigueur Quantitatifs · Live Odds API"
+            title="Panoplie de Paris Suggérés (Filtre Strict Cotes 1.35 – 4.50)"
           />
           <p className="mt-1 text-xs" style={{ color: "var(--color-muted)" }}>
-            Suggestions réelles extraites de SofaScore & The Odds API. Fact-checking des blessures par <span className="font-semibold text-blue-400">Gemini 1.5 Flash IA</span>.
+            Filtre strict anti-paris irrationnels : Cotes bornées entre 1.35 et 4.50 max, probabilité modèle ≥ 22%, gestion des risques Kelly (max 3% bankroll).
           </p>
         </div>
         <button
@@ -447,7 +455,6 @@ export default function SuggestionsPage() {
         })}
       </div>
 
-      {/* Summary stats */}
       <div
         className="mb-6 grid grid-cols-3 gap-4 rounded-xl p-5"
         style={{
@@ -460,7 +467,7 @@ export default function SuggestionsPage() {
             className="font-mono text-[11px] uppercase tracking-wide"
             style={{ color: "var(--color-muted)" }}
           >
-            Suggestions actives
+            Suggestions qualifiées
           </div>
           <div className="mt-1 font-mono text-2xl font-bold">
             {actionable.length}
@@ -471,7 +478,7 @@ export default function SuggestionsPage() {
             className="font-mono text-[11px] uppercase tracking-wide"
             style={{ color: "var(--color-muted)" }}
           >
-            Exposition Kelly Total
+            Exposition Kelly Prudente
           </div>
           <div
             className="mt-1 font-mono text-2xl font-bold"
@@ -496,22 +503,20 @@ export default function SuggestionsPage() {
         </div>
       </div>
 
-      {/* Loading state */}
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Extraction des suggestions réelles SofaScore...</p>
+          <p className="text-sm font-medium">Analyse et filtrage des paris rationnels en cours...</p>
         </div>
       )}
 
-      {/* Suggestions List */}
       {!loading && (
         <Card className="overflow-hidden">
           {actionable.length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-sm font-medium">Aucune suggestion pour ces filtres</p>
+              <p className="text-sm font-medium">Aucune suggestion qualifiée avec cotes entre 1.35 et 4.50</p>
               <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-                Essayez de choisir "Tous les paris" ou de modifier le filtre de date.
+                Toutes les cotes ont été filtrées pour éviter les spéculations trop risquées.
               </p>
             </div>
           ) : (

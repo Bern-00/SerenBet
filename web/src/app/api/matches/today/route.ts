@@ -3,17 +3,19 @@
  *
  * Source : The Odds API (ODDS_API_KEY) — cotes réelles des bookmakers
  * Ligues couvertes : EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, Europa League
- * Fenêtre : matchs disponibles (jusqu'à ~7 jours à venir selon le calendrier réel)
  *
- * Probabilités calculées par modèle Poisson basé sur les moyennes historiques par ligue.
- * Aucune donnée inventée — tout est extrait des API réelles.
+ * Filtres quants de rigueur (Filtre anti-aberrations) :
+ * - Cotes autorisées : entre 1.30 et 4.50 (Exclusion stricte des cotes irrationnelles de 12.00, 32.00...)
+ * - Probabilité modèle minimale : >= 22%
+ * - EV espéré : entre +2.0% et +25.0% (Exclusion des anomalies de cote)
+ * - Capital Kelly : plafonné à 3.0% de la bankroll max (Gestion des risques stricte)
  */
 
 import { NextResponse } from "next/server";
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 
-// Toutes les ligues disponibles avec metadata
+// Configurations des ligues
 const SPORTS_CONFIG = [
   { key: "soccer_epl",                    name: "Premier League",    country: "England",  flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { key: "soccer_spain_la_liga",          name: "La Liga",           country: "Spain",    flag: "🇪🇸" },
@@ -26,7 +28,6 @@ const SPORTS_CONFIG = [
   { key: "soccer_netherlands_eredivisie",name: "Eredivisie",        country: "Netherlands", flag: "🇳🇱" },
 ];
 
-// Statistiques moyennes par ligue (saison 2023-24, sources publiques)
 const LEAGUE_STAT_AVERAGES: Record<string, {
   goals_home: number; goals_away: number;
   corners_home: number; corners_away: number;
@@ -96,7 +97,6 @@ export async function GET() {
     for (const event of events) {
       if (!event.bookmakers?.length) continue;
 
-      // Prendre la meilleure cote disponible parmi les bookmakers
       let bestHome = 0, bestDraw = 0, bestAway = 0, bestBk = "";
       for (const bk of event.bookmakers) {
         const h2h = bk.markets?.find((m: { key: string }) => m.key === "h2h");
@@ -116,7 +116,6 @@ export async function GET() {
       const stats = getStatRates(league);
       const modelProbs = poissonProbs(stats.goals_home, stats.goals_away);
 
-      // Calcul des edges
       const implHome = 1 / bestHome;
       const implDraw = bestDraw > 1 ? 1 / bestDraw : 0;
       const implAway = 1 / bestAway;
@@ -129,11 +128,23 @@ export async function GET() {
       const evDraw = modelProbs.draw * bestDraw - 1;
       const evAway = modelProbs.away * bestAway - 1;
 
+      // -------------------------------------------------------------
+      // FILTRAGE QUANT RIGOUREUX — Anti-Paris Irrationnels (ex: @12.00, @32.00)
+      // 1. Cotes obligatoirement entre 1.30 et 4.50 max
+      // 2. Probabilité modèle d'au moins 22% (0.22)
+      // 3. Expected Value (EV) entre +2.0% et +25.0% max (filtre anomalies)
+      // -------------------------------------------------------------
       const candidates = [
-        { outcome: "home" as const, edge: edgeHome, ev: evHome, odd: bestHome },
-        { outcome: "draw" as const, edge: edgeDraw, ev: evDraw, odd: bestDraw },
-        { outcome: "away" as const, edge: edgeAway, ev: evAway, odd: bestAway },
-      ].filter(c => c.ev > 0.02);
+        { outcome: "home" as const, edge: edgeHome, ev: evHome, odd: bestHome, prob: modelProbs.home },
+        { outcome: "draw" as const, edge: edgeDraw, ev: evDraw, odd: bestDraw, prob: modelProbs.draw },
+        { outcome: "away" as const, edge: edgeAway, ev: evAway, odd: bestAway, prob: modelProbs.away },
+      ].filter(c =>
+        c.odd >= 1.30 &&
+        c.odd <= 4.50 &&
+        c.prob >= 0.22 &&
+        c.ev >= 0.02 &&
+        c.ev <= 0.25
+      );
 
       candidates.sort((a, b) => b.ev - a.ev);
       const best = candidates[0] ?? null;
@@ -174,7 +185,6 @@ export async function GET() {
     }
   }
 
-  // Trier par date de match croissante
   matches.sort((a: any, b: any) =>
     new Date(a.commence_time).getTime() - new Date(b.commence_time).getTime()
   );
@@ -185,8 +195,5 @@ export async function GET() {
     matches,
     is_demo: false,
     fetched_at: new Date().toISOString(),
-    note: matches.length === 0
-      ? "Aucun match disponible actuellement — période de trêve ou pré-saison."
-      : null,
   });
 }

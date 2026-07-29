@@ -53,90 +53,102 @@ export default function PicksPage() {
         const extracted: BettingPick[] = [];
 
         for (const m of matches) {
-          if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev > 0.02) {
+          if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
             const mktOdd = m.market_odds[m.best_outcome];
             const modelP = m.model_probs[m.best_outcome];
-            const implP = 1 / mktOdd;
-            const edge = modelP - implP;
-            const label =
-              m.best_outcome === "home"
-                ? `${m.home_team} gagne`
-                : m.best_outcome === "away"
-                  ? `${m.away_team} gagne`
-                  : "Match nul";
-            const kellyRaw = edge / (mktOdd - 1);
-            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.05);
 
-            extracted.push({
-              id: `live-${m.id}-1x2`,
-              match_id: m.id,
-              home_team: m.home_team,
-              away_team: m.away_team,
-              competition: m.competition,
-              sport: m.sport,
-              commence_time: m.commence_time,
-              market_type: "1X2",
-              outcome: m.best_outcome,
-              outcome_label: label,
-              odds: mktOdd,
-              model_probability: modelP,
-              market_probability: implP,
-              edge,
-              expected_value: m.best_ev,
-              confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
-              kelly_fraction: kelly,
-              kelly_stake_euros: Math.round(bankroll * kelly),
-              bookmaker: m.best_bookmaker ?? "OddsAPI",
-              is_suspicious: false,
-              is_demo: false,
-            });
-          }
-
-          if (m.stat_rates) {
-            const panoply = computeFullMarketPanoply(m.stat_rates);
-            const topStatMarkets = [
-              ...panoply.goals.filter((i) => i.modelProb > 0.60),
-              ...panoply.corners.filter((i) => i.modelProb > 0.60),
-              ...panoply.cards.filter((i) => i.modelProb > 0.62),
-            ];
-
-            for (const item of topStatMarkets) {
-              const fairOdds = item.fairOdds;
-              const marketOdds = parseFloat((fairOdds * 1.08).toFixed(2));
-              const implP = 1 / marketOdds;
-              const edge = item.modelProb - implP;
-              const ev = item.modelProb * marketOdds - 1;
-              const kellyRaw = edge / (marketOdds - 1);
-              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.04);
+            // Filtre de rigueur : cote entre 1.35 et 4.50, proba >= 22%
+            if (mktOdd >= 1.35 && mktOdd <= 4.50 && modelP >= 0.22) {
+              const implP = 1 / mktOdd;
+              const edge = modelP - implP;
+              const label =
+                m.best_outcome === "home"
+                  ? `${m.home_team} gagne`
+                  : m.best_outcome === "away"
+                    ? `${m.away_team} gagne`
+                    : "Match nul";
+              const kellyRaw = edge / (mktOdd - 1);
+              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
 
               extracted.push({
-                id: `live-${m.id}-${item.category}-${item.selection}`,
+                id: `live-${m.id}-1x2`,
                 match_id: m.id,
                 home_team: m.home_team,
                 away_team: m.away_team,
                 competition: m.competition,
                 sport: m.sport,
                 commence_time: m.commence_time,
-                market_type: item.category as any,
-                outcome: item.selection,
-                outcome_label: item.selection,
-                odds: marketOdds,
-                model_probability: item.modelProb,
+                market_type: "1X2",
+                outcome: m.best_outcome,
+                outcome_label: label,
+                odds: mktOdd,
+                model_probability: modelP,
                 market_probability: implP,
                 edge,
-                expected_value: Math.max(ev, 0.03),
-                confidence: item.modelProb >= 0.66 ? "high" : "medium",
+                expected_value: m.best_ev,
+                confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
                 kelly_fraction: kelly,
                 kelly_stake_euros: Math.round(bankroll * kelly),
-                bookmaker: "SofaScore Quant",
+                bookmaker: m.best_bookmaker ?? "OddsAPI",
                 is_suspicious: false,
                 is_demo: false,
               });
             }
           }
+
+          if (m.stat_rates) {
+            const panoply = computeFullMarketPanoply(m.stat_rates);
+            const candidateMarkets = [
+              ...panoply.goals,
+              ...panoply.corners,
+              ...panoply.cards,
+              ...panoply.shots,
+            ];
+
+            for (const item of candidateMarkets) {
+              if (item.modelProb >= 0.58 && item.modelProb <= 0.88 && item.fairOdds >= 1.25 && item.fairOdds <= 3.20) {
+                const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
+                if (marketOdds < 1.35 || marketOdds > 4.20) continue;
+
+                const implP = 1 / marketOdds;
+                const edge = item.modelProb - implP;
+                const ev = item.modelProb * marketOdds - 1;
+
+                if (ev < 0.02 || ev > 0.20) continue;
+
+                const kellyRaw = edge / (marketOdds - 1);
+                const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+
+                extracted.push({
+                  id: `live-${m.id}-${item.category}-${item.selection}`,
+                  match_id: m.id,
+                  home_team: m.home_team,
+                  away_team: m.away_team,
+                  competition: m.competition,
+                  sport: m.sport,
+                  commence_time: m.commence_time,
+                  market_type: item.category as any,
+                  outcome: item.selection,
+                  outcome_label: item.selection,
+                  odds: marketOdds,
+                  model_probability: item.modelProb,
+                  market_probability: implP,
+                  edge,
+                  expected_value: parseFloat(ev.toFixed(4)),
+                  confidence: item.modelProb >= 0.66 ? "high" : "medium",
+                  kelly_fraction: kelly,
+                  kelly_stake_euros: Math.round(bankroll * kelly),
+                  bookmaker: "SofaScore Quant",
+                  is_suspicious: false,
+                  is_demo: false,
+                });
+              }
+            }
+          }
         }
 
-        setLivePicks(extracted.length > 0 ? extracted : DEMO_PICKS);
+        const filtered = extracted.filter(p => p.odds >= 1.35 && p.odds <= 4.50);
+        setLivePicks(filtered.length > 0 ? filtered : DEMO_PICKS);
       } else {
         setIsRealData(false);
         setLivePicks(DEMO_PICKS);
@@ -163,7 +175,7 @@ export default function PicksPage() {
   return (
     <div>
       <div className="mb-6 flex items-start justify-between">
-        <PageHeader eyebrow="Classement par EV" title="Top Picks du Moment" />
+        <PageHeader eyebrow="Sélection Rigoureuse" title="Top Picks (Cotes 1.35 – 4.50)" />
         {isRealData ? (
           <span
             className="rounded-full px-3 py-1 text-[11px] font-mono font-semibold"
@@ -189,7 +201,6 @@ export default function PicksPage() {
         )}
       </div>
 
-      {/* Résumé par niveau de confiance */}
       <div className="mb-6 flex flex-wrap gap-3">
         {[
           { level: "high" as const, picks: highConf, label: "Confiance élevée" },
@@ -219,13 +230,12 @@ export default function PicksPage() {
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Chargement des Top Picks réels...</p>
+          <p className="text-sm font-medium">Filtrage des Top Picks réels et rationnels...</p>
         </div>
       )}
 
       {!loading && (
         <>
-          {/* Picks ★★★ */}
           {highConf.length > 0 && (
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
@@ -240,7 +250,6 @@ export default function PicksPage() {
             </section>
           )}
 
-          {/* Picks ★★ */}
           {medConf.length > 0 && (
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
@@ -259,7 +268,6 @@ export default function PicksPage() {
             </section>
           )}
 
-          {/* Picks ★ */}
           {lowConf.length > 0 && (
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
