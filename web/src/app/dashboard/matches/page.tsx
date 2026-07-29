@@ -253,14 +253,13 @@ export default function MatchesPage() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <PageHeader
-            eyebrow={`Données réelles · ${formatFullDate(today.toISOString())}`}
-            title="Matchs du Jour — Big Leagues"
+            eyebrow={`Calendrier officiel · Big Leagues`}
+            title="Prochains Matchs — Cotes Réelles"
           />
           <p className="mt-1 text-xs" style={{ color: "var(--color-muted)" }}>
             Source :{" "}
-            <span className="font-semibold text-green-500">SofaScore</span> (matchs réels) +{" "}
-            <span className="font-semibold" style={{ color: "var(--color-blue)" }}>The Odds API</span> (cotes réelles).
-            Probabilités par modèle Poisson.
+            <span className="font-semibold" style={{ color: "var(--color-blue)" }}>The Odds API</span> — cotes réelles bookmakers européens.
+            Probabilités par modèle Poisson (Loi de Poisson bivariée).
           </p>
           {lastRefresh && (
             <p className="mt-0.5 font-mono text-[10px]" style={{ color: "var(--color-muted)" }}>
@@ -308,21 +307,23 @@ export default function MatchesPage() {
         <div className="mb-6 grid grid-cols-3 gap-4 rounded-xl p-4"
           style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
           <div>
-            <div className="font-mono text-[11px] uppercase" style={{ color: "var(--color-muted)" }}>Matchs du jour</div>
-            <div className="mt-1 font-mono text-2xl font-bold">{data.total_events_today}</div>
-            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>toutes compétitions</div>
+            <div className="font-mono text-[11px] uppercase" style={{ color: "var(--color-muted)" }}>Matchs disponibles</div>
+            <div className="mt-1 font-mono text-2xl font-bold">{matches.length}</div>
+            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>Big Leagues (cotes réelles)</div>
           </div>
           <div>
-            <div className="font-mono text-[11px] uppercase" style={{ color: "var(--color-muted)" }}>Big Leagues</div>
-            <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-blue)" }}>{data.big_league_events}</div>
-            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>filtrés</div>
+            <div className="font-mono text-[11px] uppercase" style={{ color: "var(--color-muted)" }}>Avec cotes disponibles</div>
+            <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-blue)" }}>
+              {matches.filter((m) => m.market_odds !== null).length}
+            </div>
+            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>bookmakers EU</div>
           </div>
           <div>
             <div className="font-mono text-[11px] uppercase" style={{ color: "var(--color-muted)" }}>Value Bets détectés</div>
             <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-success)" }}>
-              {matches.filter((m) => m.best_ev !== null && m.best_ev > 0.02).length}
+              {matches.filter((m) => m.best_ev !== null && m.best_ev >= 0.02 && m.best_ev <= 0.25).length}
             </div>
-            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>EV {'>'} +2%</div>
+            <div className="text-[11px]" style={{ color: "var(--color-muted)" }}>EV +2% à +25% (filtre strict)</div>
           </div>
         </div>
       )}
@@ -365,9 +366,9 @@ export default function MatchesPage() {
         filteredMatches.length === 0 ? (
           <div className="rounded-xl p-12 text-center" style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
             <div className="text-3xl mb-3">🗓️</div>
-            <p className="font-semibold">Aucun match de Big League programmé aujourd'hui</p>
+            <p className="font-semibold">Aucun match disponible pour cette ligue</p>
             <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-              {data ? `${data.total_events_today} matchs au total aujourd'hui — tous hors Big Leagues.` : ""}
+              Période pré-saison — les ligues reprennent à partir d&apos;août 2026.
             </p>
           </div>
         ) : (
