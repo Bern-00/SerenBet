@@ -1,12 +1,14 @@
 import { redirect } from "next/navigation";
 import { createClient } from "./server";
 
-/** Récupère l'utilisateur authentifié ou redirige vers /login.
- *
- * Ne pas se fier uniquement au layout admin pour ça : Next.js peut lancer
- * le data-fetching d'une page avant que le redirect() du layout parent ait
- * pris effet, donc chaque page qui a besoin de l'utilisateur doit vérifier
- * elle-même (sinon crash sur `user!.id` avec un user null). */
+/**
+ * Email de l'administrateur unique du système SerenBet.
+ * Seul cet email a accès au panneau Admin (/admin).
+ * Les autres comptes n'ont accès qu'au Dashboard Parieur (/dashboard).
+ */
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "waddlybernlouisjean@gmail.com";
+
+/** Récupère l'utilisateur authentifié ou redirige vers /login. */
 export async function requireUser() {
   const supabase = await createClient();
   const {
@@ -18,4 +20,33 @@ export async function requireUser() {
   }
 
   return { supabase, user };
+}
+
+/**
+ * Récupère l'utilisateur authentifié ET vérifie qu'il est admin.
+ * Si l'utilisateur n'est pas admin, redirige vers /dashboard.
+ * Usage : dans les layouts/pages /admin uniquement.
+ */
+export async function requireAdmin() {
+  const { supabase, user } = await requireUser();
+
+  if (user.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+    redirect("/dashboard");
+  }
+
+  return { supabase, user };
+}
+
+/** Retourne true si l'utilisateur connecté est l'admin. */
+export async function isAdmin(): Promise<boolean> {
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return false;
+    return user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  } catch {
+    return false;
+  }
 }

@@ -1,4 +1,4 @@
-import { requireUser } from "@/lib/supabase/require-user";
+import { requireAdmin } from "@/lib/supabase/require-user";
 import { Logo } from "@/components/logo";
 import { AdminNav } from "@/components/admin-nav";
 import { signOut } from "@/app/login/actions";
@@ -8,7 +8,9 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { user } = await requireUser();
+  // requireAdmin() redirige automatiquement vers /dashboard
+  // si l'email connecté n'est pas l'admin SerenBet.
+  const { user } = await requireAdmin();
 
   return (
     <div className="flex min-h-full flex-col">

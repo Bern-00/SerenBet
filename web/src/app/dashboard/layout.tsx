@@ -1,4 +1,4 @@
-import { requireUser } from "@/lib/supabase/require-user";
+import { requireUser, isAdmin } from "@/lib/supabase/require-user";
 import { Logo } from "@/components/logo";
 import { DashboardNav } from "@/components/dashboard-nav";
 import { signOut } from "@/app/login/actions";
@@ -10,6 +10,7 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const { user } = await requireUser();
+  const admin = await isAdmin();
 
   return (
     <div className="flex min-h-full flex-col">
@@ -62,13 +63,15 @@ export default async function DashboardLayout({
               </button>
             </form>
 
-            <Link
-              href="/admin"
-              className="text-xs transition-colors hover:opacity-80"
-              style={{ color: "var(--color-muted)" }}
-            >
-              ← Admin
-            </Link>
+            {admin && (
+              <Link
+                href="/admin"
+                className="text-xs transition-colors hover:opacity-80"
+                style={{ color: "var(--color-muted)" }}
+              >
+                ← Admin
+              </Link>
+            )}
             <form action={signOut}>
               <button
                 type="submit"

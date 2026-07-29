@@ -3,6 +3,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "waddlybernlouisjean@gmail.com";
+
 export async function signIn(formData: FormData) {
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
@@ -14,7 +16,11 @@ export async function signIn(formData: FormData) {
     redirect(`/login?error=${encodeURIComponent(error.message)}`);
   }
 
-  redirect("/admin");
+  // Admin → panneau admin, tout autre compte → dashboard parieur uniquement
+  if (email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    redirect("/admin");
+  }
+  redirect("/dashboard");
 }
 
 export async function signUp(formData: FormData) {
