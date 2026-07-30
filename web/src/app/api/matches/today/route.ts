@@ -9,6 +9,9 @@
  * - double_chance (1X, X2, 12)
  * - draw_no_bet (DNB Domicile / DNB Extérieur)
  * - spreads (Handicap asiatique)
+ *
+ * Ligues couvertes : EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, Europa League,
+ *                   Liga Portugal, Eredivisie, MLS, Matchs Amicaux Internationaux
  */
 
 import { NextResponse } from "next/server";
@@ -25,6 +28,9 @@ const SPORTS_CONFIG = [
   { key: "soccer_uefa_europa_league",    name: "Europa League",     country: "Europe",   flag: "🟠" },
   { key: "soccer_portugal_primeira_liga",name: "Liga Portugal",     country: "Portugal", flag: "🇵🇹" },
   { key: "soccer_netherlands_eredivisie",name: "Eredivisie",        country: "Netherlands", flag: "🇳🇱" },
+  { key: "soccer_usa_mls",               name: "MLS",               country: "USA",      flag: "🇺🇸" },
+  { key: "soccer_conmebol_copa_america", name: "Copa América",      country: "S. America",flag: "🌎" },
+  { key: "soccer_international",         name: "Matchs Amicaux",    country: "Intl",     flag: "🌍" },
 ];
 
 const LEAGUE_STAT_AVERAGES: Record<string, {
@@ -42,6 +48,9 @@ const LEAGUE_STAT_AVERAGES: Record<string, {
   "Serie A":          { goals_home: 1.45, goals_away: 1.05, corners_home: 5.2,  corners_away: 4.0,  cards_home: 2.6,  cards_away: 2.9,  fouls_home: 13.5, fouls_away: 14.1, shots_home: 12.8, shots_away: 9.5,  sot_home: 4.4, sot_away: 3.2, offsides_home: 1.7, offsides_away: 1.5 },
   "Ligue 1":          { goals_home: 1.55, goals_away: 1.10, corners_home: 5.3,  corners_away: 4.2,  cards_home: 2.8,  cards_away: 3.1,  fouls_home: 13.8, fouls_away: 14.8, shots_home: 13.2, shots_away: 9.9,  sot_home: 4.6, sot_away: 3.4, offsides_home: 1.9, offsides_away: 1.6 },
   "Champions League": { goals_home: 1.80, goals_away: 1.25, corners_home: 6.0,  corners_away: 4.6,  cards_home: 1.7,  cards_away: 2.0,  fouls_home: 10.5, fouls_away: 11.5, shots_home: 14.5, shots_away: 10.8, sot_home: 5.1, sot_away: 3.8, offsides_home: 2.1, offsides_away: 1.8 },
+  "MLS":              { goals_home: 1.55, goals_away: 1.30, corners_home: 5.0,  corners_away: 4.5,  cards_home: 2.0,  cards_away: 2.3,  fouls_home: 11.0, fouls_away: 11.8, shots_home: 12.8, shots_away: 11.5, sot_home: 4.5, sot_away: 4.0, offsides_home: 1.7, offsides_away: 1.6 },
+  "Copa América":     { goals_home: 1.20, goals_away: 1.00, corners_home: 4.8,  corners_away: 4.2,  cards_home: 2.5,  cards_away: 2.8,  fouls_home: 12.5, fouls_away: 13.0, shots_home: 11.5, shots_away: 10.0, sot_home: 3.9, sot_away: 3.4, offsides_home: 1.5, offsides_away: 1.4 },
+  "Matchs Amicaux":   { goals_home: 1.45, goals_away: 1.25, corners_home: 5.0,  corners_away: 4.5,  cards_home: 1.5,  cards_away: 1.6,  fouls_home: 9.5,  fouls_away: 10.0, shots_home: 12.0, shots_away: 10.5, sot_home: 4.2, sot_away: 3.8, offsides_home: 1.6, offsides_away: 1.5 },
   "default":          { goals_home: 1.55, goals_away: 1.10, corners_home: 5.4,  corners_away: 4.2,  cards_home: 2.1,  cards_away: 2.4,  fouls_home: 11.5, fouls_away: 12.5, shots_home: 13.5, shots_away: 10.0, sot_home: 4.8, sot_away: 3.5, offsides_home: 1.9, offsides_away: 1.6 },
 };
 

@@ -5,9 +5,26 @@ import Link from "next/link";
 import { PageHeader, Card, StatCard } from "@/components/ui";
 import { PickCard } from "@/components/pick-card";
 import { ProbabilityBar } from "@/components/probability-bar";
-import type { BettingPick, UpcomingMatch } from "@/lib/types";
+import type { BettingPick, UpcomingMatch, MarketCategory } from "@/lib/types";
 import { DEMO_PICKS, DEMO_UPCOMING_MATCHES } from "@/lib/demo-data";
-import { computeFullMarketPanoply } from "@/lib/statistical-model";
+import {
+  probOver,
+  probUnder,
+  probBTTS,
+  probDoubleChance,
+  probDrawNoBet,
+  probHandicap,
+} from "@/lib/statistical-model";
+
+type RealMarketItem = {
+  category: "1X2" | "totals" | "btts" | "double_chance" | "draw_no_bet" | "handicap";
+  selection: string;
+  label: string;
+  odds: number;
+  bookmaker: string;
+  line?: number;
+  raw_outcome?: string;
+};
 
 type LiveMatch = {
   id: string;
@@ -19,6 +36,7 @@ type LiveMatch = {
   status: string;
   model_probs: { home: number; draw: number; away: number };
   market_odds: { home: number; draw: number; away: number } | null;
+  real_markets?: RealMarketItem[];
   best_bookmaker: string | null;
   best_outcome: "home" | "draw" | "away" | null;
   best_edge: number | null;
@@ -82,94 +100,83 @@ export default function DashboardPage() {
 
         const picks: BettingPick[] = [];
         for (const m of matches) {
-          if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
-            const mktOdd = m.market_odds[m.best_outcome];
-            const modelP = m.model_probs[m.best_outcome];
+          if (!m.real_markets || m.real_markets.length === 0) continue;
 
-            // Filtre de rigueur stricte : cotes 1.35 à 4.50 max, proba >= 22%
-            if (mktOdd >= 1.35 && mktOdd <= 4.50 && modelP >= 0.22) {
-              const implP = 1 / mktOdd;
-              const edge = modelP - implP;
-              const label = m.best_outcome === "home" ? `${m.home_team} gagne` : m.best_outcome === "away" ? `${m.away_team} gagne` : "Match nul";
-              const kellyRaw = edge / (mktOdd - 1);
-              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+          const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
+          const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
+          const totalGoalsLambda = lambdaHome + lambdaAway;
+          const model1X2 = m.model_probs;
+          const candidates: BettingPick[] = [];
 
-              picks.push({
-                id: `live-${m.id}-1x2`,
-                match_id: m.id,
-                home_team: m.home_team,
-                away_team: m.away_team,
-                competition: m.competition,
-                sport: m.sport,
-                commence_time: m.commence_time,
-                market_type: "1X2",
-                outcome: m.best_outcome,
-                outcome_label: label,
-                odds: mktOdd,
-                model_probability: modelP,
-                market_probability: implP,
-                edge,
-                expected_value: m.best_ev,
-                confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
-                kelly_fraction: kelly,
-                kelly_stake_euros: Math.round(bankroll * kelly),
-                bookmaker: m.best_bookmaker ?? "OddsAPI",
-                is_suspicious: false,
-                is_demo: false,
-              });
+          for (const item of m.real_markets) {
+            let modelProb = 0;
+            if (item.category === "1X2") {
+              if (item.selection === "home") modelProb = model1X2.home;
+              else if (item.selection === "away") modelProb = model1X2.away;
+              else if (item.selection === "draw") modelProb = model1X2.draw;
+            } else if (item.category === "totals") {
+              const line = item.line ?? 2.5;
+              modelProb = (item.raw_outcome === "Over" || item.selection.startsWith("Over"))
+                ? probOver(line, totalGoalsLambda)
+                : probUnder(line, totalGoalsLambda);
+            } else if (item.category === "btts") {
+              const bttsProb = probBTTS(lambdaHome, lambdaAway);
+              modelProb = (item.raw_outcome === "Yes" || item.selection.includes("Oui")) ? bttsProb : 1 - bttsProb;
+            } else if (item.category === "double_chance") {
+              const dc = probDoubleChance(model1X2);
+              if (item.raw_outcome?.includes(m.home_team)) modelProb = dc.home_draw;
+              else if (item.raw_outcome?.includes(m.away_team)) modelProb = dc.away_draw;
+              else modelProb = dc.home_away;
+            } else if (item.category === "draw_no_bet") {
+              const dnb = probDrawNoBet(model1X2);
+              modelProb = item.raw_outcome === m.home_team ? dnb.home : dnb.away;
+            } else if (item.category === "handicap") {
+              const line = item.line ?? 0;
+              const hc = probHandicap(lambdaHome, lambdaAway, line);
+              modelProb = item.raw_outcome === m.home_team ? hc.home : hc.away;
             }
-          }
 
-          if (m.stat_rates) {
-            const panoply = computeFullMarketPanoply(m.stat_rates);
-            const candidateMarkets = [
-              ...panoply.goals,
-              ...panoply.corners,
-              ...panoply.cards,
-              ...panoply.shots,
-            ];
-
-            for (const item of candidateMarkets) {
-              if (item.modelProb >= 0.58 && item.modelProb <= 0.88 && item.fairOdds >= 1.25 && item.fairOdds <= 3.20) {
-                const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
-                if (marketOdds < 1.35 || marketOdds > 4.20) continue;
-
-                const implP = 1 / marketOdds;
-                const edge = item.modelProb - implP;
-                const ev = item.modelProb * marketOdds - 1;
-
-                if (ev < 0.02 || ev > 0.20) continue;
-
-                const kellyRaw = edge / (marketOdds - 1);
+            if (item.odds >= 1.25 && item.odds <= 4.50 && modelProb >= 0.22) {
+              const implP = 1 / item.odds;
+              const edge = modelProb - implP;
+              const ev = modelProb * item.odds - 1;
+              if (ev >= 0.02 && ev <= 0.30) {
+                const kellyRaw = edge / (item.odds - 1);
                 const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
-
-                picks.push({
-                  id: `live-${m.id}-${item.category}-${item.selection}`,
+                candidates.push({
+                  id: `live-${m.id}-${item.category}-${item.selection}-${item.bookmaker}`,
                   match_id: m.id,
                   home_team: m.home_team,
                   away_team: m.away_team,
                   competition: m.competition,
                   sport: m.sport,
                   commence_time: m.commence_time,
-                  market_type: item.category as any,
+                  market_type: item.category as MarketCategory,
                   outcome: item.selection,
-                  outcome_label: item.selection,
-                  odds: marketOdds,
-                  model_probability: item.modelProb,
+                  outcome_label: item.label,
+                  odds: item.odds,
+                  model_probability: modelProb,
                   market_probability: implP,
                   edge,
                   expected_value: parseFloat(ev.toFixed(4)),
-                  confidence: item.modelProb >= 0.66 ? "high" : "medium",
+                  confidence: modelProb >= 0.65 ? "high" : modelProb >= 0.45 ? "medium" : "low",
                   kelly_fraction: kelly,
                   kelly_stake_euros: Math.round(bankroll * kelly),
-                  bookmaker: "SofaScore Quant",
+                  bookmaker: item.bookmaker,
                   is_suspicious: false,
                   is_demo: false,
                 });
               }
             }
           }
+
+          // Événement le plus probable pour ce match
+          candidates.sort((a, b) => b.model_probability - a.model_probability);
+          if (candidates[0]) picks.push(candidates[0]);
         }
+
+        // Tri global : probabilité décroissante — les vrais top picks en premier
+        picks.sort((a, b) => b.model_probability - a.model_probability);
 
         const filtered = picks.filter(p => p.odds >= 1.35 && p.odds <= 4.50);
         setLivePicks(filtered.length > 0 ? filtered : DEMO_PICKS);

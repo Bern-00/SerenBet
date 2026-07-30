@@ -4,9 +4,26 @@ import { useState, useEffect, useCallback } from "react";
 import { PageHeader } from "@/components/ui";
 import { PickCard } from "@/components/pick-card";
 import { ConfidenceBadge } from "@/components/confidence-badge";
-import type { BettingPick } from "@/lib/types";
+import type { BettingPick, MarketCategory } from "@/lib/types";
 import { DEMO_PICKS } from "@/lib/demo-data";
-import { computeFullMarketPanoply } from "@/lib/statistical-model";
+import {
+  probOver,
+  probUnder,
+  probBTTS,
+  probDoubleChance,
+  probDrawNoBet,
+  probHandicap,
+} from "@/lib/statistical-model";
+
+type RealMarketItem = {
+  category: "1X2" | "totals" | "btts" | "double_chance" | "draw_no_bet" | "handicap";
+  selection: string;
+  label: string;
+  odds: number;
+  bookmaker: string;
+  line?: number;
+  raw_outcome?: string;
+};
 
 type LiveMatch = {
   id: string;
@@ -18,6 +35,7 @@ type LiveMatch = {
   status: string;
   model_probs: { home: number; draw: number; away: number };
   market_odds: { home: number; draw: number; away: number } | null;
+  real_markets?: RealMarketItem[];
   best_bookmaker: string | null;
   best_outcome: "home" | "draw" | "away" | null;
   best_edge: number | null;
@@ -33,6 +51,101 @@ type LiveMatch = {
     lambda_offsides_home: number; lambda_offsides_away: number;
   };
 };
+
+/**
+ * Sélecteur de l'événement le plus probable par match parmi les cotes réelles.
+ * Trie par probabilité de réussite (model_prob) — pas par EV.
+ * C'est la proba de l'événement qui détermine si c'est un vrai "top pick".
+ */
+function selectOptimalEvent(m: LiveMatch, bankroll: number): BettingPick | null {
+  if (!m.real_markets || m.real_markets.length === 0) return null;
+
+  const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
+  const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
+  const totalGoalsLambda = lambdaHome + lambdaAway;
+  const model1X2 = m.model_probs;
+
+  const candidates: BettingPick[] = [];
+
+  for (const item of m.real_markets) {
+    let modelProb = 0;
+
+    if (item.category === "1X2") {
+      if (item.selection === "home") modelProb = model1X2.home;
+      else if (item.selection === "away") modelProb = model1X2.away;
+      else if (item.selection === "draw") modelProb = model1X2.draw;
+    } else if (item.category === "totals") {
+      const line = item.line ?? 2.5;
+      if (item.raw_outcome === "Over" || item.selection.startsWith("Over")) {
+        modelProb = probOver(line, totalGoalsLambda);
+      } else {
+        modelProb = probUnder(line, totalGoalsLambda);
+      }
+    } else if (item.category === "btts") {
+      const bttsProb = probBTTS(lambdaHome, lambdaAway);
+      modelProb = (item.raw_outcome === "Yes" || item.selection.includes("Oui")) ? bttsProb : 1 - bttsProb;
+    } else if (item.category === "double_chance") {
+      const dc = probDoubleChance(model1X2);
+      if (item.raw_outcome?.includes(m.home_team) || item.raw_outcome === `${m.home_team} or Draw`) {
+        modelProb = dc.home_draw;
+      } else if (item.raw_outcome?.includes(m.away_team) || item.raw_outcome === `${m.away_team} or Draw`) {
+        modelProb = dc.away_draw;
+      } else {
+        modelProb = dc.home_away;
+      }
+    } else if (item.category === "draw_no_bet") {
+      const dnb = probDrawNoBet(model1X2);
+      modelProb = item.raw_outcome === m.home_team ? dnb.home : dnb.away;
+    } else if (item.category === "handicap") {
+      const line = item.line ?? 0;
+      const hc = probHandicap(lambdaHome, lambdaAway, line);
+      modelProb = item.raw_outcome === m.home_team ? hc.home : hc.away;
+    }
+
+    // Filtre quant : cote 1.25–4.50, probabilité >= 22%, EV positif
+    if (item.odds >= 1.25 && item.odds <= 4.50 && modelProb >= 0.22) {
+      const implP = 1 / item.odds;
+      const edge = modelProb - implP;
+      const ev = modelProb * item.odds - 1;
+
+      if (ev >= 0.02 && ev <= 0.30) {
+        const kellyRaw = edge / (item.odds - 1);
+        const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+
+        candidates.push({
+          id: `live-${m.id}-${item.category}-${item.selection}-${item.bookmaker}`,
+          match_id: m.id,
+          home_team: m.home_team,
+          away_team: m.away_team,
+          competition: m.competition,
+          sport: m.sport,
+          commence_time: m.commence_time,
+          market_type: item.category as MarketCategory,
+          outcome: item.selection,
+          outcome_label: item.label,
+          odds: item.odds,
+          model_probability: modelProb,
+          market_probability: implP,
+          edge,
+          expected_value: parseFloat(ev.toFixed(4)),
+          // confidence basé sur la probabilité de réussite — c'est ça le "top pick"
+          confidence: modelProb >= 0.65 ? "high" : modelProb >= 0.45 ? "medium" : "low",
+          kelly_fraction: kelly,
+          kelly_stake_euros: Math.round(bankroll * kelly),
+          bookmaker: item.bookmaker,
+          is_suspicious: false,
+          is_demo: false,
+        });
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Trier par probabilité de réussite (événement le PLUS PROBABLE de se produire)
+  candidates.sort((a, b) => b.model_probability - a.model_probability);
+  return candidates[0];
+}
 
 export default function PicksPage() {
   const bankroll = 1000;
@@ -53,102 +166,17 @@ export default function PicksPage() {
         const extracted: BettingPick[] = [];
 
         for (const m of matches) {
-          if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
-            const mktOdd = m.market_odds[m.best_outcome];
-            const modelP = m.model_probs[m.best_outcome];
-
-            // Filtre de rigueur : cote entre 1.35 et 4.50, proba >= 22%
-            if (mktOdd >= 1.35 && mktOdd <= 4.50 && modelP >= 0.22) {
-              const implP = 1 / mktOdd;
-              const edge = modelP - implP;
-              const label =
-                m.best_outcome === "home"
-                  ? `${m.home_team} gagne`
-                  : m.best_outcome === "away"
-                    ? `${m.away_team} gagne`
-                    : "Match nul";
-              const kellyRaw = edge / (mktOdd - 1);
-              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
-
-              extracted.push({
-                id: `live-${m.id}-1x2`,
-                match_id: m.id,
-                home_team: m.home_team,
-                away_team: m.away_team,
-                competition: m.competition,
-                sport: m.sport,
-                commence_time: m.commence_time,
-                market_type: "1X2",
-                outcome: m.best_outcome,
-                outcome_label: label,
-                odds: mktOdd,
-                model_probability: modelP,
-                market_probability: implP,
-                edge,
-                expected_value: m.best_ev,
-                confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
-                kelly_fraction: kelly,
-                kelly_stake_euros: Math.round(bankroll * kelly),
-                bookmaker: m.best_bookmaker ?? "OddsAPI",
-                is_suspicious: false,
-                is_demo: false,
-              });
-            }
-          }
-
-          if (m.stat_rates) {
-            const panoply = computeFullMarketPanoply(m.stat_rates);
-            const candidateMarkets = [
-              ...panoply.goals,
-              ...panoply.corners,
-              ...panoply.cards,
-              ...panoply.shots,
-            ];
-
-            for (const item of candidateMarkets) {
-              if (item.modelProb >= 0.58 && item.modelProb <= 0.88 && item.fairOdds >= 1.25 && item.fairOdds <= 3.20) {
-                const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
-                if (marketOdds < 1.35 || marketOdds > 4.20) continue;
-
-                const implP = 1 / marketOdds;
-                const edge = item.modelProb - implP;
-                const ev = item.modelProb * marketOdds - 1;
-
-                if (ev < 0.02 || ev > 0.20) continue;
-
-                const kellyRaw = edge / (marketOdds - 1);
-                const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
-
-                extracted.push({
-                  id: `live-${m.id}-${item.category}-${item.selection}`,
-                  match_id: m.id,
-                  home_team: m.home_team,
-                  away_team: m.away_team,
-                  competition: m.competition,
-                  sport: m.sport,
-                  commence_time: m.commence_time,
-                  market_type: item.category as any,
-                  outcome: item.selection,
-                  outcome_label: item.selection,
-                  odds: marketOdds,
-                  model_probability: item.modelProb,
-                  market_probability: implP,
-                  edge,
-                  expected_value: parseFloat(ev.toFixed(4)),
-                  confidence: item.modelProb >= 0.66 ? "high" : "medium",
-                  kelly_fraction: kelly,
-                  kelly_stake_euros: Math.round(bankroll * kelly),
-                  bookmaker: "SofaScore Quant",
-                  is_suspicious: false,
-                  is_demo: false,
-                });
-              }
-            }
+          // Sélection intelligente : l'événement le plus probable avec cote réelle
+          const best = selectOptimalEvent(m, bankroll);
+          if (best) {
+            extracted.push(best);
           }
         }
 
-        const filtered = extracted.filter(p => p.odds >= 1.35 && p.odds <= 4.50);
-        setLivePicks(filtered.length > 0 ? filtered : DEMO_PICKS);
+        // Tri final : probabilité de réussite décroissante (les "tops picks" en premier)
+        extracted.sort((a, b) => b.model_probability - a.model_probability);
+
+        setLivePicks(extracted.length > 0 ? extracted : DEMO_PICKS);
       } else {
         setIsRealData(false);
         setLivePicks(DEMO_PICKS);
@@ -166,16 +194,18 @@ export default function PicksPage() {
   }, [fetchLivePicks]);
 
   const picks = livePicks;
-  const sorted = [...picks].sort((a, b) => b.expected_value - a.expected_value);
 
-  const highConf = sorted.filter((p) => p.confidence === "high");
-  const medConf = sorted.filter((p) => p.confidence === "medium");
-  const lowConf = sorted.filter((p) => p.confidence === "low");
+  const highConf = picks.filter((p) => p.confidence === "high");
+  const medConf = picks.filter((p) => p.confidence === "medium");
+  const lowConf = picks.filter((p) => p.confidence === "low");
 
   return (
     <div>
       <div className="mb-6 flex items-start justify-between">
-        <PageHeader eyebrow="Sélection Rigoureuse" title="Top Picks (Cotes 1.35 – 4.50)" />
+        <PageHeader
+          eyebrow="Sélection Rigoureuse · Cotes Réelles Multi-Marchés"
+          title="Top Picks — Événements les plus probables"
+        />
         {isRealData ? (
           <span
             className="rounded-full px-3 py-1 text-[11px] font-mono font-semibold"
@@ -185,7 +215,7 @@ export default function PicksPage() {
               border: "1px solid color-mix(in srgb, var(--color-success) 30%, transparent)",
             }}
           >
-            🟢 Données Réelles Live (The Odds API)
+            🟢 Données Réelles Live (The Odds API Multi-Marchés)
           </span>
         ) : (
           <span
@@ -196,16 +226,20 @@ export default function PicksPage() {
               border: "1px dashed var(--color-border)",
             }}
           >
-            {loading ? "⚡ Chargement API Live..." : "Données illustratives"}
+            {loading ? "⚡ Analyse en cours..." : "Données illustratives"}
           </span>
         )}
       </div>
 
+      <div className="mb-4 rounded-lg p-3 text-xs" style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", color: "var(--color-muted)" }}>
+        💡 <strong style={{ color: "var(--color-text)" }}>Méthode de sélection :</strong> Pour chaque match, le système scanne toutes les cotes réelles des bookmakers (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap) et sélectionne l'événement avec la <strong style={{ color: "var(--color-amber)" }}>probabilité de réussite la plus élevée</strong> selon le modèle de Poisson.
+      </div>
+
       <div className="mb-6 flex flex-wrap gap-3">
         {[
-          { level: "high" as const, picks: highConf, label: "Confiance élevée" },
-          { level: "medium" as const, picks: medConf, label: "Confiance moyenne" },
-          { level: "low" as const, picks: lowConf, label: "Confiance faible" },
+          { level: "high" as const, picks: highConf, label: "Confiance élevée (≥65%)" },
+          { level: "medium" as const, picks: medConf, label: "Confiance moyenne (45–64%)" },
+          { level: "low" as const, picks: lowConf, label: "Confiance faible (22–44%)" },
         ].map(({ level, picks: ps, label }) => (
           <div
             key={level}
@@ -230,7 +264,7 @@ export default function PicksPage() {
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Filtrage des Top Picks réels et rationnels...</p>
+          <p className="text-sm font-medium">Sélection des événements les plus probables sur cotes réelles multi-marchés...</p>
         </div>
       )}
 
@@ -240,7 +274,7 @@ export default function PicksPage() {
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
                 <ConfidenceBadge level="high" size="md" />
-                <h2 className="text-sm font-semibold">Confiance élevée</h2>
+                <h2 className="text-sm font-semibold">Confiance élevée — Probabilité ≥ 65%</h2>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {highConf.map((pick, i) => (
@@ -254,7 +288,7 @@ export default function PicksPage() {
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
                 <ConfidenceBadge level="medium" size="md" />
-                <h2 className="text-sm font-semibold">Confiance moyenne</h2>
+                <h2 className="text-sm font-semibold">Confiance moyenne — Probabilité 45–64%</h2>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {medConf.map((pick, i) => (
@@ -272,7 +306,7 @@ export default function PicksPage() {
             <section className="mb-8">
               <div className="mb-3 flex items-center gap-2">
                 <ConfidenceBadge level="low" size="md" />
-                <h2 className="text-sm font-semibold">Confiance faible</h2>
+                <h2 className="text-sm font-semibold">Confiance faible — Probabilité 22–44%</h2>
               </div>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {lowConf.map((pick, i) => (
@@ -284,6 +318,15 @@ export default function PicksPage() {
                 ))}
               </div>
             </section>
+          )}
+
+          {picks.length === 0 && (
+            <div className="py-12 text-center">
+              <p className="text-sm font-medium">Aucun top pick qualifié détecté</p>
+              <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
+                Le marché ne présente pas encore d'événements avec Edge positif et forte probabilité.
+              </p>
+            </div>
           )}
         </>
       )}
