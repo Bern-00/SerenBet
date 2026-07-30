@@ -56,6 +56,21 @@ type LiveMatch = {
   };
 };
 
+const LEAGUE_META: Record<string, { flag: string; country: string }> = {
+  "Premier League":   { flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", country: "Angleterre" },
+  "La Liga":          { flag: "🇪🇸", country: "Espagne" },
+  "Bundesliga":       { flag: "🇩🇪", country: "Allemagne" },
+  "Serie A":          { flag: "🇮🇹", country: "Italie" },
+  "Ligue 1":          { flag: "🇫🇷", country: "France" },
+  "Champions League": { flag: "⭐",  country: "Europe" },
+  "Europa League":    { flag: "🟠",  country: "Europe" },
+  "Liga Portugal":    { flag: "🇵🇹", country: "Portugal" },
+  "Eredivisie":       { flag: "🇳🇱", country: "Pays-Bas" },
+  "MLS":              { flag: "🇺🇸", country: "États-Unis" },
+  "Copa América":     { flag: "🌎", country: "Amérique du Sud" },
+  "Matchs Amicaux":   { flag: "🤝", country: "Match Amical International / Clubs" },
+};
+
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString("fr-FR", {
     weekday: "short",
@@ -107,12 +122,6 @@ const MARKET_BADGE_COLORS: Record<string, string> = {
   "goals":        "var(--color-success)",
 };
 
-/**
- * Sélectionne l'événement le plus probable par match.
- * Phase 1 : scan des marchés réels bookmakers (cotes exactes)
- * Phase 2 : si insuffisant, fallback sur le modèle statistique Poisson
- * (Cartons, Tirs, Corners, Fautes) — clairement labellisés comme tels.
- */
 function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
   const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
   const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
@@ -120,9 +129,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
   const model1X2 = m.model_probs;
   const candidates: BettingPick[] = [];
 
-  // ───────────────────────────────────────────
-  // PHASE 1 : marchés réels des bookmakers
-  // ───────────────────────────────────────────
   if (m.real_markets && m.real_markets.length > 0) {
     for (const item of m.real_markets) {
       let modelProb = 0;
@@ -190,11 +196,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
     }
   }
 
-  // ───────────────────────────────────────────
-  // PHASE 2 : fallback Poisson pour marchés statistiques
-  // (Cartons Jaunes, Tirs Cadrés/Total, Corners, Fautes)
-  // Toujours ajoutés — la sélection finale prend le plus probable
-  // ───────────────────────────────────────────
   if (m.stat_rates) {
     const panoply = computeFullMarketPanoply(m.stat_rates);
     const statMarkets = [
@@ -208,7 +209,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
       if (item.modelProb < 0.45 || item.modelProb > 0.96) continue;
       if (item.fairOdds < 1.20 || item.fairOdds > 4.50) continue;
 
-      // Cote estimée du marché = fairOdds + marge bookmaker ~8%
       const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
       if (marketOdds < 1.30 || marketOdds > 4.50) continue;
 
@@ -230,7 +230,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
         commence_time: m.commence_time,
         market_type: item.category as MarketCategory,
         outcome: item.selection,
-        // Label clair : indique que c'est une estimation statistique
         outcome_label: `${item.selection} ★ Estimation Statistique`,
         odds: marketOdds,
         model_probability: item.modelProb,
@@ -240,7 +239,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
         confidence: item.modelProb >= 0.65 ? "high" : item.modelProb >= 0.45 ? "medium" : "low",
         kelly_fraction: kelly,
         kelly_stake_euros: Math.round(bankroll * kelly),
-        // Label bookmaker honnête : modèle stat, pas une vraie cote
         bookmaker: "📊 Modèle Poisson",
         is_suspicious: false,
         is_demo: false,
@@ -250,7 +248,6 @@ function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
 
   if (candidates.length === 0) return null;
 
-  // Tri : probabilité de réussite décroissante → l'événement le plus probable de se produire
   candidates.sort((a, b) => b.model_probability - a.model_probability);
   return candidates[0];
 }
@@ -267,6 +264,9 @@ function SuggestionRow({
   const stakeFromCurrentBankroll = Math.round(bankroll * pick.kelly_fraction);
   const badgeColor = MARKET_BADGE_COLORS[pick.market_type ?? "1X2"] ?? "var(--color-text)";
   const isStatModel = pick.bookmaker === "📊 Modèle Poisson";
+  const isFriendly = pick.competition === "Matchs Amicaux" || pick.competition.toLowerCase().includes("amical") || pick.competition.toLowerCase().includes("friendly");
+
+  const meta = LEAGUE_META[pick.competition] ?? { flag: "⚽", country: pick.competition };
 
   return (
     <div
@@ -297,6 +297,20 @@ function SuggestionRow({
               >
                 {pick.market_type ?? "1X2"}
               </span>
+
+              {isFriendly && (
+                <span
+                  className="font-mono text-[10px] font-bold rounded-full px-2 py-0.5 uppercase tracking-wide flex items-center gap-1"
+                  style={{
+                    background: "color-mix(in srgb, var(--color-amber) 15%, transparent)",
+                    color: "var(--color-amber)",
+                    border: "1px solid color-mix(in srgb, var(--color-amber) 30%, transparent)",
+                  }}
+                >
+                  🤝 Match Amical
+                </span>
+              )}
+
               {isStatModel && (
                 <span
                   className="font-mono text-[10px] rounded-full px-2 py-0.5"
@@ -309,8 +323,10 @@ function SuggestionRow({
                   Estimation Statistique
                 </span>
               )}
-              <span className="text-[11px] font-mono" style={{ color: "var(--color-muted)" }}>
-                {pick.competition}
+
+              <span className="text-[11px] font-mono flex items-center gap-1" style={{ color: "var(--color-muted)" }}>
+                <span>{meta.flag}</span>
+                <span>{pick.competition}</span>
               </span>
             </div>
 
@@ -322,7 +338,7 @@ function SuggestionRow({
                 {pick.outcome_label.replace(" ★ Estimation Statistique", "")}
               </span>{" "}
               <span style={{ color: "var(--color-muted)" }}>
-                ({pick.home_team} – {pick.away_team})
+                ({pick.home_team} vs {pick.away_team})
               </span>{" "}
               {!isStatModel && (
                 <>
@@ -406,6 +422,8 @@ export default function SuggestionsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedDateKey, setSelectedDateKey] = useState<string>("all");
   const [selectedMarketCat, setSelectedMarketCat] = useState<string>("all");
+  const [selectedLeague, setSelectedLeague] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<"league" | "flat">("league");
 
   const fetchLiveSuggestions = useCallback(async () => {
     setLoading(true);
@@ -418,7 +436,6 @@ export default function SuggestionsPage() {
       const extracted: BettingPick[] = [];
 
       for (const m of matches) {
-        // Sélection intelligente hybride : bookmaker réel en priorité, stat Poisson en fallback
         const best = selectBestEvent(m, bankroll);
         if (best) extracted.push(best);
       }
@@ -437,6 +454,7 @@ export default function SuggestionsPage() {
 
   const picks = livePicks;
 
+  // Filtrage par date
   const dateGroups = picks.reduce((acc, p) => {
     const key = formatDayKey(p.commence_time);
     if (!acc[key]) acc[key] = [];
@@ -465,9 +483,23 @@ export default function SuggestionsPage() {
     filteredPicks = filteredPicks.filter((p) => p.market_type === selectedMarketCat);
   }
 
+  if (selectedLeague !== "all") {
+    filteredPicks = filteredPicks.filter((p) => p.competition === selectedLeague);
+  }
+
   const actionable = filteredPicks
     .filter((p) => !p.is_suspicious && p.odds >= 1.25 && p.odds <= 4.50)
     .sort((a, b) => b.model_probability - a.model_probability);
+
+  // Groupement par Championnat
+  const leagueGroups = actionable.reduce((acc, p) => {
+    const comp = p.competition;
+    if (!acc[comp]) acc[comp] = [];
+    acc[comp].push(p);
+    return acc;
+  }, {} as Record<string, BettingPick[]>);
+
+  const availableLeagues = Array.from(new Set(picks.map((p) => p.competition)));
 
   const totalStake = actionable.reduce(
     (s, p) => s + Math.round(bankroll * p.kelly_fraction),
@@ -486,21 +518,47 @@ export default function SuggestionsPage() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <PageHeader
-            eyebrow="Moteur Hybride · Bookmakers Réels + Modèle Statistique Poisson"
-            title="Panoplie de Paris Suggérés"
+            eyebrow="Rigueur Quantitative · Classement par Championnat"
+            title="Panoplie de Paris Suggérés par Ligues & Équipes"
           />
           <p className="mt-1 text-xs" style={{ color: "var(--color-muted)" }}>
-            Événement optimal par match : Cotes réelles (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap) + estimations Poisson (Cartons, Tirs, Corners, Fautes).
+            Sélection de l'événement optimal par match, structuré par championnat (PL, La Liga, MLS, Amicaux...) avec cotes réelles + modèle Poisson.
           </p>
         </div>
-        <button
-          onClick={fetchLiveSuggestions}
-          disabled={loading}
-          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-mono text-xs font-semibold transition-opacity hover:opacity-80"
-          style={{ background: "var(--color-amber)", color: "var(--color-ground)" }}
-        >
-          {loading ? "⏳ Analyse..." : "🔄 Actualiser"}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Toggle de Mode d'Affichage */}
+          <div className="flex items-center rounded-lg p-1" style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
+            <button
+              onClick={() => setViewMode("league")}
+              className="rounded-md px-3 py-1 text-xs font-semibold transition-all"
+              style={{
+                background: viewMode === "league" ? "var(--color-blue)" : "transparent",
+                color: viewMode === "league" ? "#ffffff" : "var(--color-muted)",
+              }}
+            >
+              🏆 Par Championnat
+            </button>
+            <button
+              onClick={() => setViewMode("flat")}
+              className="rounded-md px-3 py-1 text-xs font-semibold transition-all"
+              style={{
+                background: viewMode === "flat" ? "var(--color-blue)" : "transparent",
+                color: viewMode === "flat" ? "#ffffff" : "var(--color-muted)",
+              }}
+            >
+              🔥 Vue Liste
+            </button>
+          </div>
+
+          <button
+            onClick={fetchLiveSuggestions}
+            disabled={loading}
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-mono text-xs font-semibold transition-opacity hover:opacity-80"
+            style={{ background: "var(--color-amber)", color: "var(--color-ground)" }}
+          >
+            {loading ? "⏳ Analyse..." : "🔄 Actualiser"}
+          </button>
+        </div>
       </div>
 
       <DateFilterBar
@@ -509,9 +567,51 @@ export default function SuggestionsPage() {
         onSelectKey={setSelectedDateKey}
       />
 
+      {/* Barre de Filtre par Championnat */}
+      <div className="mb-4 flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
+        <span className="text-[11px] font-mono tracking-wide mr-1" style={{ color: "var(--color-muted)" }}>
+          Championnat :
+        </span>
+        <button
+          type="button"
+          onClick={() => setSelectedLeague("all")}
+          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all"
+          style={{
+            background: selectedLeague === "all" ? "var(--color-text)" : "var(--color-surface-2)",
+            color: selectedLeague === "all" ? "var(--color-ground)" : "var(--color-text)",
+          }}
+        >
+          🌐 Tous ({picks.length})
+        </button>
+
+        {availableLeagues.map((league) => {
+          const active = selectedLeague === league;
+          const meta = LEAGUE_META[league] ?? { flag: "⚽", country: league };
+          const count = picks.filter((p) => p.competition === league).length;
+
+          return (
+            <button
+              key={league}
+              type="button"
+              onClick={() => setSelectedLeague(league)}
+              className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all"
+              style={{
+                background: active ? "var(--color-amber)" : "var(--color-surface-2)",
+                color: active ? "var(--color-ground)" : "var(--color-text)",
+              }}
+            >
+              <span>{meta.flag}</span>
+              <span>{league}</span>
+              <span className="font-mono text-[10px] font-bold opacity-80">({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Barre de Filtre par type de pari */}
       <div className="mb-6 flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-mono tracking-wide mr-1" style={{ color: "var(--color-muted)" }}>
-          Marché :
+          Type de pari :
         </span>
         {MARKET_CATEGORY_FILTERS.map((cat) => {
           const active = selectedMarketCat === cat.key;
@@ -520,7 +620,7 @@ export default function SuggestionsPage() {
               key={cat.key}
               type="button"
               onClick={() => setSelectedMarketCat(cat.key)}
-              className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all"
+              className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all"
               style={{
                 background: active ? "var(--color-blue)" : "var(--color-surface-2)",
                 color: active ? "#ffffff" : "var(--color-text)",
@@ -533,6 +633,7 @@ export default function SuggestionsPage() {
         })}
       </div>
 
+      {/* Stat-cards résumé */}
       <div
         className="mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4 rounded-xl p-5"
         style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
@@ -545,10 +646,10 @@ export default function SuggestionsPage() {
         </div>
         <div>
           <div className="font-mono text-[11px] uppercase tracking-wide" style={{ color: "var(--color-muted)" }}>
-            Cotes Réelles Bookmakers
+            Championnats actifs
           </div>
-          <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-success)" }}>
-            {realCount}
+          <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-blue)" }}>
+            {Object.keys(leagueGroups).length}
           </div>
         </div>
         <div>
@@ -569,44 +670,96 @@ export default function SuggestionsPage() {
         </div>
       </div>
 
-      {/* Légende */}
-      <div
-        className="mb-4 flex flex-wrap gap-3 rounded-lg p-3 text-[11px]"
-        style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
-      >
-        <div className="flex items-center gap-1.5">
-          <span className="inline-block w-2 h-2 rounded-full" style={{ background: "var(--color-success)" }} />
-          <span style={{ color: "var(--color-muted)" }}><strong style={{ color: "var(--color-text)" }}>{realCount}</strong> suggestions avec cotes réelles des bookmakers</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="inline-block w-2 h-2 rounded-full border" style={{ borderColor: "var(--color-border)" }} />
-          <span style={{ color: "var(--color-muted)" }}><strong style={{ color: "var(--color-text)" }}>{statCount}</strong> estimations Poisson (Cartons / Tirs / Corners / Fautes) — vérifier la cote chez votre bookmaker</span>
-        </div>
-      </div>
-
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Analyse hybride des marchés réels et estimations statistiques...</p>
+          <p className="text-sm font-medium">Analyse et structuration par championnat...</p>
         </div>
       )}
 
-      {!loading && (
+      {!loading && actionable.length === 0 && (
+        <Card className="p-8 text-center">
+          <p className="text-sm font-medium">Aucune suggestion qualifiée pour ces critères</p>
+          <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
+            Essayez de sélectionner un autre championnat ou réinitialiser les filtres.
+          </p>
+        </Card>
+      )}
+
+      {/* AFFICHAGE PAR CHAMPIONNAT (DEFAULT MODE) */}
+      {!loading && actionable.length > 0 && viewMode === "league" && (
+        <div className="space-y-6">
+          {Object.entries(leagueGroups).map(([leagueName, leaguePicks]) => {
+            const meta = LEAGUE_META[leagueName] ?? { flag: "⚽", country: leagueName };
+            const isFriendlyComp = leagueName === "Matchs Amicaux" || leagueName.toLowerCase().includes("amical");
+
+            const leagueStake = leaguePicks.reduce((s, p) => s + Math.round(bankroll * p.kelly_fraction), 0);
+            const leagueProfit = leaguePicks.reduce((s, p) => s + Math.round(bankroll * p.kelly_fraction) * p.expected_value, 0);
+
+            return (
+              <div key={leagueName} className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--color-border)" }}>
+                {/* En-tête du Championnat */}
+                <div
+                  className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5"
+                  style={{
+                    background: "var(--color-surface)",
+                    borderBottom: "1px solid var(--color-border)",
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-xl">{meta.flag}</span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-bold text-base leading-none">{leagueName}</h2>
+                        {isFriendlyComp && (
+                          <span
+                            className="font-mono text-[10px] font-bold rounded-full px-2 py-0.5 uppercase tracking-wide"
+                            style={{
+                              background: "color-mix(in srgb, var(--color-amber) 15%, transparent)",
+                              color: "var(--color-amber)",
+                              border: "1px solid color-mix(in srgb, var(--color-amber) 30%, transparent)",
+                            }}
+                          >
+                            🤝 Matchs Amicaux
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[11px] font-mono" style={{ color: "var(--color-muted)" }}>
+                        {meta.country} · {leaguePicks.length} match{leaguePicks.length > 1 ? "s" : ""} évalué{leaguePicks.length > 1 ? "s" : ""}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs">
+                    <div>
+                      <span style={{ color: "var(--color-muted)" }}>Engagement : </span>
+                      <span className="font-mono font-bold" style={{ color: "var(--color-amber)" }}>{leagueStake}€</span>
+                    </div>
+                    <div>
+                      <span style={{ color: "var(--color-muted)" }}>+EV Espéré : </span>
+                      <span className="font-mono font-bold" style={{ color: "var(--color-success)" }}>+{leagueProfit.toFixed(0)}€</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Liste des matchs de ce championnat */}
+                <Card className="rounded-none border-none">
+                  {leaguePicks.map((pick, i) => (
+                    <SuggestionRow key={pick.id} pick={pick} rank={i + 1} bankroll={bankroll} />
+                  ))}
+                </Card>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* AFFICHAGE EN VUE LISTE PLATE */}
+      {!loading && actionable.length > 0 && viewMode === "flat" && (
         <Card className="overflow-hidden">
-          {actionable.length === 0 ? (
-            <div className="p-8 text-center">
-              <p className="text-sm font-medium">Aucune suggestion qualifiée pour ces critères</p>
-              <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-                Seuls les événements avec Edge positif et probabilité ≥ 22% sont retenus.
-              </p>
-            </div>
-          ) : (
-            <div>
-              {actionable.map((pick, i) => (
-                <SuggestionRow key={pick.id} pick={pick} rank={i + 1} bankroll={bankroll} />
-              ))}
-            </div>
-          )}
+          {actionable.map((pick, i) => (
+            <SuggestionRow key={pick.id} pick={pick} rank={i + 1} bankroll={bankroll} />
+          ))}
         </Card>
       )}
     </div>

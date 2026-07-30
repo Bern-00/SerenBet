@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { PageHeader } from "@/components/ui";
+import { PageHeader, Card } from "@/components/ui";
 import { PickCard } from "@/components/pick-card";
 import { ConfidenceBadge } from "@/components/confidence-badge";
 import type { BettingPick, MarketCategory } from "@/lib/types";
@@ -53,11 +53,21 @@ type LiveMatch = {
   };
 };
 
-/**
- * Sélecteur d'événement optimal hybride pour Top Picks :
- * Scan des marchés réels bookmakers + modèle Poisson en fallback (Cartons, Tirs, Corners, Fautes).
- * Trie par probabilité de réussite (model_prob) pour garantir que le Top Pick est l'événement le plus probable.
- */
+const LEAGUE_META: Record<string, { flag: string; country: string }> = {
+  "Premier League":   { flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", country: "Angleterre" },
+  "La Liga":          { flag: "🇪🇸", country: "Espagne" },
+  "Bundesliga":       { flag: "🇩🇪", country: "Allemagne" },
+  "Serie A":          { flag: "🇮🇹", country: "Italie" },
+  "Ligue 1":          { flag: "🇫🇷", country: "France" },
+  "Champions League": { flag: "⭐",  country: "Europe" },
+  "Europa League":    { flag: "🟠",  country: "Europe" },
+  "Liga Portugal":    { flag: "🇵🇹", country: "Portugal" },
+  "Eredivisie":       { flag: "🇳🇱", country: "Pays-Bas" },
+  "MLS":              { flag: "🇺🇸", country: "États-Unis" },
+  "Copa América":     { flag: "🌎", country: "Amérique du Sud" },
+  "Matchs Amicaux":   { flag: "🤝", country: "Match Amical International / Clubs" },
+};
+
 function selectBestPickForMatch(m: LiveMatch, bankroll: number): BettingPick | null {
   const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
   const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
@@ -66,7 +76,6 @@ function selectBestPickForMatch(m: LiveMatch, bankroll: number): BettingPick | n
 
   const candidates: BettingPick[] = [];
 
-  // 1. Scan marchés réels bookmakers
   if (m.real_markets && m.real_markets.length > 0) {
     for (const item of m.real_markets) {
       let modelProb = 0;
@@ -134,7 +143,6 @@ function selectBestPickForMatch(m: LiveMatch, bankroll: number): BettingPick | n
     }
   }
 
-  // 2. Scan marchés statistiques Poisson (Cartons, Tirs, Corners, Fautes)
   if (m.stat_rates) {
     const panoply = computeFullMarketPanoply(m.stat_rates);
     const statMarkets = [
@@ -187,7 +195,6 @@ function selectBestPickForMatch(m: LiveMatch, bankroll: number): BettingPick | n
 
   if (candidates.length === 0) return null;
 
-  // Trier par probabilité de réussite (événement le plus probable de se produire)
   candidates.sort((a, b) => b.model_probability - a.model_probability);
   return candidates[0];
 }
@@ -197,6 +204,7 @@ export default function PicksPage() {
   const [loading, setLoading] = useState(true);
   const [livePicks, setLivePicks] = useState<BettingPick[]>([]);
   const [isRealData, setIsRealData] = useState(false);
+  const [selectedLeague, setSelectedLeague] = useState<string>("all");
 
   const fetchLivePicks = useCallback(async () => {
     setLoading(true);
@@ -215,9 +223,7 @@ export default function PicksPage() {
           if (best) extracted.push(best);
         }
 
-        // Tri global : probabilité de réussite décroissante (les événements les plus sûrs en haut)
         extracted.sort((a, b) => b.model_probability - a.model_probability);
-
         setLivePicks(extracted.length > 0 ? extracted : DEMO_PICKS);
       } else {
         setIsRealData(false);
@@ -236,18 +242,25 @@ export default function PicksPage() {
   }, [fetchLivePicks]);
 
   const picks = livePicks;
+  const availableLeagues = Array.from(new Set(picks.map((p) => p.competition)));
 
-  const highConf = picks.filter((p) => p.confidence === "high");
-  const medConf = picks.filter((p) => p.confidence === "medium");
-  const lowConf = picks.filter((p) => p.confidence === "low");
+  const filteredPicks = selectedLeague === "all"
+    ? picks
+    : picks.filter((p) => p.competition === selectedLeague);
+
+  const highConf = filteredPicks.filter((p) => p.confidence === "high");
+  const medConf = filteredPicks.filter((p) => p.confidence === "medium");
+  const lowConf = filteredPicks.filter((p) => p.confidence === "low");
 
   return (
     <div>
       <div className="mb-6 flex items-start justify-between">
-        <PageHeader
-          eyebrow="Moteur Hybride · Cotes Réelles Bookmakers + Modèle Statistique Poisson"
-          title="Top Picks — Événements les Plus Probables"
-        />
+        <div>
+          <PageHeader
+            eyebrow="Sélection Rigoureuse · Filtrage par Championnat"
+            title="Top Picks — Événements les Plus Probables"
+          />
+        </div>
         {isRealData ? (
           <span
             className="rounded-full px-3 py-1 text-[11px] font-mono font-semibold"
@@ -257,7 +270,7 @@ export default function PicksPage() {
               border: "1px solid color-mix(in srgb, var(--color-success) 30%, transparent)",
             }}
           >
-            🟢 Multi-Marchés Live (The Odds API + Poisson)
+            🟢 Live Multi-Marchés (The Odds API + Poisson)
           </span>
         ) : (
           <span
@@ -273,8 +286,45 @@ export default function PicksPage() {
         )}
       </div>
 
-      <div className="mb-4 rounded-lg p-3 text-xs" style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", color: "var(--color-muted)" }}>
-        💡 <strong style={{ color: "var(--color-text)" }}>Méthode Top Picks :</strong> Analyse complète des marchés réels (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap) + estimations Poisson (Cartons, Tirs Cadrés/Total, Corners, Fautes). Chaque match est représenté par l'événement ayant le <strong style={{ color: "var(--color-amber)" }}>taux de probabilité de réussite le plus élevé</strong>.
+      {/* Filtre par Championnat */}
+      <div className="mb-6 flex flex-wrap items-center gap-2 overflow-x-auto pb-1">
+        <span className="text-[11px] font-mono tracking-wide mr-1" style={{ color: "var(--color-muted)" }}>
+          Championnat :
+        </span>
+        <button
+          type="button"
+          onClick={() => setSelectedLeague("all")}
+          className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all"
+          style={{
+            background: selectedLeague === "all" ? "var(--color-text)" : "var(--color-surface-2)",
+            color: selectedLeague === "all" ? "var(--color-ground)" : "var(--color-text)",
+          }}
+        >
+          🌐 Tous ({picks.length})
+        </button>
+
+        {availableLeagues.map((league) => {
+          const active = selectedLeague === league;
+          const meta = LEAGUE_META[league] ?? { flag: "⚽", country: league };
+          const count = picks.filter((p) => p.competition === league).length;
+
+          return (
+            <button
+              key={league}
+              type="button"
+              onClick={() => setSelectedLeague(league)}
+              className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-all"
+              style={{
+                background: active ? "var(--color-amber)" : "var(--color-surface-2)",
+                color: active ? "var(--color-ground)" : "var(--color-text)",
+              }}
+            >
+              <span>{meta.flag}</span>
+              <span>{league}</span>
+              <span className="font-mono text-[10px] font-bold opacity-80">({count})</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="mb-6 flex flex-wrap gap-3">
@@ -306,7 +356,7 @@ export default function PicksPage() {
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Détection des Top Picks (Bookmakers + Poisson)...</p>
+          <p className="text-sm font-medium">Détection des Top Picks par championnat...</p>
         </div>
       )}
 
@@ -362,11 +412,11 @@ export default function PicksPage() {
             </section>
           )}
 
-          {picks.length === 0 && (
+          {filteredPicks.length === 0 && (
             <div className="py-12 text-center">
-              <p className="text-sm font-medium">Aucun top pick qualifié détecté</p>
+              <p className="text-sm font-medium">Aucun top pick qualifié détecté pour ce championnat</p>
               <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-                Aucun événement ne valide le critère Edge positif et probabilité minimale.
+                Essayez de sélectionner un autre championnat ou afficher tous les championnats.
               </p>
             </div>
           )}
