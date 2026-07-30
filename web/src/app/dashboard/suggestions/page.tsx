@@ -32,6 +32,7 @@ type LiveMatch = {
   id: string;
   sport: string;
   competition: string;
+  competition_flag?: string;
   home_team: string;
   away_team: string;
   commence_time: string;
@@ -79,19 +80,180 @@ function formatDayLabel(iso: string): string {
   return dayStr;
 }
 
-const MARKET_CATEGORY_FILTERS: Array<{
-  key: string;
-  label: string;
-  icon: string;
-}> = [
-  { key: "all", label: "Tous les paris réels", icon: "🔥" },
-  { key: "1X2", label: "1X2 Vainqueur", icon: "🏆" },
-  { key: "totals", label: "Over/Under Buts", icon: "⚽" },
-  { key: "btts", label: "Les 2 Marquent (BTTS)", icon: "🤝" },
-  { key: "double_chance", label: "Double Chance", icon: "🛡️" },
-  { key: "draw_no_bet", label: "Draw No Bet (DNB)", icon: "⚖️" },
-  { key: "handicap", label: "Handicap / Spreads", icon: "🎯" },
+const MARKET_CATEGORY_FILTERS = [
+  { key: "all",           label: "Tous les paris",         icon: "🔥" },
+  { key: "1X2",          label: "1X2 Vainqueur",          icon: "🏆" },
+  { key: "totals",       label: "Over/Under Buts",         icon: "⚽" },
+  { key: "btts",         label: "Les 2 Marquent (BTTS)",   icon: "🤝" },
+  { key: "double_chance",label: "Double Chance",           icon: "🛡️" },
+  { key: "draw_no_bet",  label: "Draw No Bet (DNB)",       icon: "⚖️" },
+  { key: "handicap",     label: "Handicap",                icon: "🎯" },
+  { key: "cards",        label: "Cartons Jaunes",          icon: "🟨" },
+  { key: "shots",        label: "Tirs Cadrés / Total",     icon: "🎯" },
+  { key: "corners",      label: "Corners",                 icon: "🚩" },
 ];
+
+const MARKET_BADGE_COLORS: Record<string, string> = {
+  "1X2":          "var(--color-text)",
+  "totals":       "var(--color-success)",
+  "btts":         "var(--color-blue)",
+  "double_chance":"var(--color-amber)",
+  "draw_no_bet":  "var(--color-amber)",
+  "handicap":     "#a78bfa",
+  "cards":        "#fbbf24",
+  "corners":      "#60a5fa",
+  "shots":        "#34d399",
+  "fouls":        "#f87171",
+  "goals":        "var(--color-success)",
+};
+
+/**
+ * Sélectionne l'événement le plus probable par match.
+ * Phase 1 : scan des marchés réels bookmakers (cotes exactes)
+ * Phase 2 : si insuffisant, fallback sur le modèle statistique Poisson
+ * (Cartons, Tirs, Corners, Fautes) — clairement labellisés comme tels.
+ */
+function selectBestEvent(m: LiveMatch, bankroll: number): BettingPick | null {
+  const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
+  const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
+  const totalGoalsLambda = lambdaHome + lambdaAway;
+  const model1X2 = m.model_probs;
+  const candidates: BettingPick[] = [];
+
+  // ───────────────────────────────────────────
+  // PHASE 1 : marchés réels des bookmakers
+  // ───────────────────────────────────────────
+  if (m.real_markets && m.real_markets.length > 0) {
+    for (const item of m.real_markets) {
+      let modelProb = 0;
+
+      if (item.category === "1X2") {
+        if (item.selection === "home") modelProb = model1X2.home;
+        else if (item.selection === "away") modelProb = model1X2.away;
+        else if (item.selection === "draw") modelProb = model1X2.draw;
+      } else if (item.category === "totals") {
+        const line = item.line ?? 2.5;
+        modelProb = (item.raw_outcome === "Over" || item.selection.startsWith("Over"))
+          ? probOver(line, totalGoalsLambda)
+          : probUnder(line, totalGoalsLambda);
+      } else if (item.category === "btts") {
+        const bttsProb = probBTTS(lambdaHome, lambdaAway);
+        modelProb = (item.raw_outcome === "Yes" || item.selection.includes("Oui")) ? bttsProb : 1 - bttsProb;
+      } else if (item.category === "double_chance") {
+        const dc = probDoubleChance(model1X2);
+        if (item.raw_outcome?.includes(m.home_team)) modelProb = dc.home_draw;
+        else if (item.raw_outcome?.includes(m.away_team)) modelProb = dc.away_draw;
+        else modelProb = dc.home_away;
+      } else if (item.category === "draw_no_bet") {
+        const dnb = probDrawNoBet(model1X2);
+        modelProb = item.raw_outcome === m.home_team ? dnb.home : dnb.away;
+      } else if (item.category === "handicap") {
+        const line = item.line ?? 0;
+        const hc = probHandicap(lambdaHome, lambdaAway, line);
+        modelProb = item.raw_outcome === m.home_team ? hc.home : hc.away;
+      }
+
+      if (item.odds >= 1.25 && item.odds <= 4.50 && modelProb >= 0.22) {
+        const implP = 1 / item.odds;
+        const edge = modelProb - implP;
+        const ev = modelProb * item.odds - 1;
+
+        if (ev >= 0.02 && ev <= 0.30) {
+          const kellyRaw = edge / (item.odds - 1);
+          const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+
+          candidates.push({
+            id: `live-${m.id}-${item.category}-${item.selection}-${item.bookmaker}`,
+            match_id: m.id,
+            home_team: m.home_team,
+            away_team: m.away_team,
+            competition: m.competition,
+            sport: m.sport,
+            commence_time: m.commence_time,
+            market_type: item.category as MarketCategory,
+            outcome: item.selection,
+            outcome_label: item.label,
+            odds: item.odds,
+            model_probability: modelProb,
+            market_probability: implP,
+            edge,
+            expected_value: parseFloat(ev.toFixed(4)),
+            confidence: modelProb >= 0.65 ? "high" : modelProb >= 0.45 ? "medium" : "low",
+            kelly_fraction: kelly,
+            kelly_stake_euros: Math.round(bankroll * kelly),
+            bookmaker: item.bookmaker,
+            is_suspicious: false,
+            is_demo: false,
+          });
+        }
+      }
+    }
+  }
+
+  // ───────────────────────────────────────────
+  // PHASE 2 : fallback Poisson pour marchés statistiques
+  // (Cartons Jaunes, Tirs Cadrés/Total, Corners, Fautes)
+  // Toujours ajoutés — la sélection finale prend le plus probable
+  // ───────────────────────────────────────────
+  if (m.stat_rates) {
+    const panoply = computeFullMarketPanoply(m.stat_rates);
+    const statMarkets = [
+      ...panoply.cards,
+      ...panoply.shots,
+      ...panoply.corners,
+      ...panoply.fouls,
+    ];
+
+    for (const item of statMarkets) {
+      if (item.modelProb < 0.45 || item.modelProb > 0.96) continue;
+      if (item.fairOdds < 1.20 || item.fairOdds > 4.50) continue;
+
+      // Cote estimée du marché = fairOdds + marge bookmaker ~8%
+      const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
+      if (marketOdds < 1.30 || marketOdds > 4.50) continue;
+
+      const implP = 1 / marketOdds;
+      const edge = item.modelProb - implP;
+      const ev = item.modelProb * marketOdds - 1;
+      if (ev < 0.015 || ev > 0.30) continue;
+
+      const kellyRaw = edge / (marketOdds - 1);
+      const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.025);
+
+      candidates.push({
+        id: `stat-${m.id}-${item.category}-${item.selection}`,
+        match_id: m.id,
+        home_team: m.home_team,
+        away_team: m.away_team,
+        competition: m.competition,
+        sport: m.sport,
+        commence_time: m.commence_time,
+        market_type: item.category as MarketCategory,
+        outcome: item.selection,
+        // Label clair : indique que c'est une estimation statistique
+        outcome_label: `${item.selection} ★ Estimation Statistique`,
+        odds: marketOdds,
+        model_probability: item.modelProb,
+        market_probability: implP,
+        edge,
+        expected_value: parseFloat(ev.toFixed(4)),
+        confidence: item.modelProb >= 0.65 ? "high" : item.modelProb >= 0.45 ? "medium" : "low",
+        kelly_fraction: kelly,
+        kelly_stake_euros: Math.round(bankroll * kelly),
+        // Label bookmaker honnête : modèle stat, pas une vraie cote
+        bookmaker: "📊 Modèle Poisson",
+        is_suspicious: false,
+        is_demo: false,
+      });
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Tri : probabilité de réussite décroissante → l'événement le plus probable de se produire
+  candidates.sort((a, b) => b.model_probability - a.model_probability);
+  return candidates[0];
+}
 
 function SuggestionRow({
   pick,
@@ -103,15 +265,8 @@ function SuggestionRow({
   bankroll: number;
 }) {
   const stakeFromCurrentBankroll = Math.round(bankroll * pick.kelly_fraction);
-
-  const marketBadgeColor =
-    pick.market_type === "btts"
-      ? "var(--color-blue)"
-      : pick.market_type === "totals"
-        ? "var(--color-success)"
-        : pick.market_type === "double_chance" || pick.market_type === "draw_no_bet"
-          ? "var(--color-amber)"
-          : "var(--color-text)";
+  const badgeColor = MARKET_BADGE_COLORS[pick.market_type ?? "1X2"] ?? "var(--color-text)";
+  const isStatModel = pick.bookmaker === "📊 Modèle Poisson";
 
   return (
     <div
@@ -123,51 +278,63 @@ function SuggestionRow({
           <span
             className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full font-mono text-xs font-bold"
             style={{
-              background:
-                rank === 1
-                  ? "var(--color-amber)"
-                  : "var(--color-surface-2)",
-              color:
-                rank === 1 ? "var(--color-ground)" : "var(--color-muted)",
+              background: rank === 1 ? "var(--color-amber)" : "var(--color-surface-2)",
+              color: rank === 1 ? "var(--color-ground)" : "var(--color-muted)",
             }}
           >
             {rank}
           </span>
 
           <div className="min-w-0">
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
               <span
                 className="font-mono text-[10px] font-bold rounded-full px-2 py-0.5 uppercase tracking-wide"
                 style={{
-                  background: `color-mix(in srgb, ${marketBadgeColor} 12%, transparent)`,
-                  color: marketBadgeColor,
-                  border: `1px solid color-mix(in srgb, ${marketBadgeColor} 30%, transparent)`,
+                  background: `color-mix(in srgb, ${badgeColor} 12%, transparent)`,
+                  color: badgeColor,
+                  border: `1px solid color-mix(in srgb, ${badgeColor} 30%, transparent)`,
                 }}
               >
                 {pick.market_type ?? "1X2"}
               </span>
-              <span
-                className="text-[11px] font-mono"
-                style={{ color: "var(--color-muted)" }}
-              >
+              {isStatModel && (
+                <span
+                  className="font-mono text-[10px] rounded-full px-2 py-0.5"
+                  style={{
+                    background: "color-mix(in srgb, var(--color-muted) 10%, transparent)",
+                    color: "var(--color-muted)",
+                    border: "1px dashed var(--color-border)",
+                  }}
+                >
+                  Estimation Statistique
+                </span>
+              )}
+              <span className="text-[11px] font-mono" style={{ color: "var(--color-muted)" }}>
                 {pick.competition}
               </span>
             </div>
 
             <p className="font-semibold text-sm leading-snug">
               Miser{" "}
-              <span style={{ color: "var(--color-amber)" }}>
-                {stakeFromCurrentBankroll}€
-              </span>{" "}
+              <span style={{ color: "var(--color-amber)" }}>{stakeFromCurrentBankroll}€</span>{" "}
               sur{" "}
               <span style={{ color: "var(--color-text)" }}>
-                {pick.outcome_label}
+                {pick.outcome_label.replace(" ★ Estimation Statistique", "")}
               </span>{" "}
               <span style={{ color: "var(--color-muted)" }}>
                 ({pick.home_team} – {pick.away_team})
               </span>{" "}
-              à la cote{" "}
-              <span className="font-mono font-bold">@{pick.odds.toFixed(2)}</span>
+              {!isStatModel && (
+                <>
+                  à la cote{" "}
+                  <span className="font-mono font-bold">@{pick.odds.toFixed(2)}</span>
+                </>
+              )}
+              {isStatModel && (
+                <span className="font-mono text-xs" style={{ color: "var(--color-muted)" }}>
+                  — Cote estimée @{pick.odds.toFixed(2)}
+                </span>
+              )}
             </p>
 
             <div
@@ -176,7 +343,7 @@ function SuggestionRow({
             >
               <span className="font-mono">🕒 {formatDate(pick.commence_time)}</span>
               <span>·</span>
-              <span>Bookmaker : {pick.bookmaker}</span>
+              <span>{isStatModel ? "📊 Modèle Poisson (Estimation)" : `Bookmaker : ${pick.bookmaker}`}</span>
             </div>
 
             <div className="mt-2.5">
@@ -184,7 +351,7 @@ function SuggestionRow({
                 homeTeam={pick.home_team}
                 awayTeam={pick.away_team}
                 competition={pick.competition}
-                suggestedOutcome={pick.outcome_label}
+                suggestedOutcome={pick.outcome_label.replace(" ★ Estimation Statistique", "")}
               />
             </div>
           </div>
@@ -198,37 +365,25 @@ function SuggestionRow({
       <div className="mt-3 flex flex-wrap items-center gap-4 pl-10">
         <div className="text-[11px]">
           <span style={{ color: "var(--color-muted)" }}>Edge </span>
-          <span
-            className="font-mono font-semibold"
-            style={{ color: "var(--color-success)" }}
-          >
+          <span className="font-mono font-semibold" style={{ color: "var(--color-success)" }}>
             +{(pick.edge * 100).toFixed(1)}pp
           </span>
         </div>
         <div className="text-[11px]">
           <span style={{ color: "var(--color-muted)" }}>EV </span>
-          <span
-            className="font-mono font-semibold"
-            style={{ color: "var(--color-success)" }}
-          >
+          <span className="font-mono font-semibold" style={{ color: "var(--color-success)" }}>
             +{(pick.expected_value * 100).toFixed(1)}%
           </span>
         </div>
         <div className="text-[11px]">
           <span style={{ color: "var(--color-muted)" }}>Modèle </span>
-          <span
-            className="font-mono font-semibold"
-            style={{ color: "var(--color-blue)" }}
-          >
+          <span className="font-mono font-semibold" style={{ color: "var(--color-blue)" }}>
             {(pick.model_probability * 100).toFixed(0)}%
           </span>
         </div>
         <div className="text-[11px]">
           <span style={{ color: "var(--color-muted)" }}>Kelly </span>
-          <span
-            className="font-mono font-semibold"
-            style={{ color: "var(--color-amber)" }}
-          >
+          <span className="font-mono font-semibold" style={{ color: "var(--color-amber)" }}>
             {(pick.kelly_fraction * 100).toFixed(1)}%
           </span>
         </div>
@@ -236,10 +391,7 @@ function SuggestionRow({
         <Link
           href="/admin/value-bets"
           className="ml-auto rounded-md px-3 py-1.5 text-xs font-semibold transition-opacity hover:opacity-80"
-          style={{
-            background: "var(--color-amber)",
-            color: "var(--color-ground)",
-          }}
+          style={{ background: "var(--color-amber)", color: "var(--color-ground)" }}
         >
           Placer ce pari →
         </Link>
@@ -266,106 +418,9 @@ export default function SuggestionsPage() {
       const extracted: BettingPick[] = [];
 
       for (const m of matches) {
-        const matchCandidates: BettingPick[] = [];
-        const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
-        const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
-        const totalGoalsLambda = lambdaHome + lambdaAway;
-
-        // Probabilités du modèle
-        const model1X2 = m.model_probs;
-        const max1X2Prob = Math.max(model1X2.home, model1X2.away);
-        const is1X2Dominant = max1X2Prob >= 0.70; // 70%+ de certitude sur 1X2
-
-        // Scanner TOUS les marchés réels fournis par The Odds API pour ce match
-        if (m.real_markets && m.real_markets.length > 0) {
-          for (const item of m.real_markets) {
-            let modelProb = 0;
-
-            // Calcul de la probabilité modèle selon le type de marché réel
-            if (item.category === "1X2") {
-              if (item.selection === "home") modelProb = model1X2.home;
-              else if (item.selection === "away") modelProb = model1X2.away;
-              else if (item.selection === "draw") modelProb = model1X2.draw;
-            } else if (item.category === "totals") {
-              const line = item.line ?? 2.5;
-              if (item.raw_outcome === "Over" || item.selection.startsWith("Over")) {
-                modelProb = probOver(line, totalGoalsLambda);
-              } else {
-                modelProb = probUnder(line, totalGoalsLambda);
-              }
-            } else if (item.category === "btts") {
-              const bttsProb = probBTTS(lambdaHome, lambdaAway);
-              if (item.raw_outcome === "Yes" || item.selection.includes("Oui")) {
-                modelProb = bttsProb;
-              } else {
-                modelProb = 1 - bttsProb;
-              }
-            } else if (item.category === "double_chance") {
-              const dc = probDoubleChance(model1X2);
-              if (item.raw_outcome?.includes("Home") && item.raw_outcome?.includes("Draw")) modelProb = dc.home_draw;
-              else if (item.raw_outcome?.includes("Away") && item.raw_outcome?.includes("Draw")) modelProb = dc.away_draw;
-              else modelProb = dc.home_away;
-            } else if (item.category === "draw_no_bet") {
-              const dnb = probDrawNoBet(model1X2);
-              if (item.raw_outcome === m.home_team) modelProb = dnb.home;
-              else modelProb = dnb.away;
-            } else if (item.category === "handicap") {
-              const line = item.line ?? 0;
-              const hc = probHandicap(lambdaHome, lambdaAway, line);
-              modelProb = item.raw_outcome === m.home_team ? hc.home : hc.away;
-            }
-
-            // Filtrage quant : cote entre 1.25 et 4.50, probabilité >= 22%, EV >= 2%
-            if (item.odds >= 1.25 && item.odds <= 4.50 && modelProb >= 0.22) {
-              const implP = 1 / item.odds;
-              const edge = modelProb - implP;
-              const ev = modelProb * item.odds - 1;
-
-              if (ev >= 0.02 && ev <= 0.30) {
-                const kellyRaw = edge / (item.odds - 1);
-                const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
-
-                matchCandidates.push({
-                  id: `live-${m.id}-${item.category}-${item.selection}-${item.bookmaker}`,
-                  match_id: m.id,
-                  home_team: m.home_team,
-                  away_team: m.away_team,
-                  competition: m.competition,
-                  sport: m.sport,
-                  commence_time: m.commence_time,
-                  market_type: item.category as MarketCategory,
-                  outcome: item.selection,
-                  outcome_label: item.label,
-                  odds: item.odds,
-                  model_probability: modelProb,
-                  market_probability: implP,
-                  edge,
-                  expected_value: parseFloat(ev.toFixed(4)),
-                  confidence: modelProb >= 0.65 ? "high" : modelProb >= 0.45 ? "medium" : "low",
-                  kelly_fraction: kelly,
-                  kelly_stake_euros: Math.round(bankroll * kelly),
-                  bookmaker: item.bookmaker,
-                  is_suspicious: false,
-                  is_demo: false,
-                });
-              }
-            }
-          }
-        }
-
-        // Sélection intelligente par match :
-        // Si 1X2 < 70%, trier les marchés alternatifs par probabilité de réussite (confiance max)
-        // Sinon, trier par EV (+EV)
-        matchCandidates.sort((a, b) => {
-          if (!is1X2Dominant) {
-            return b.model_probability - a.model_probability;
-          }
-          return b.expected_value - a.expected_value;
-        });
-
-        // Retenir le SEUL événement le plus probable et le plus rentable pour ce match
-        const topForMatch = matchCandidates.slice(0, 1);
-        extracted.push(...topForMatch);
+        // Sélection intelligente hybride : bookmaker réel en priorité, stat Poisson en fallback
+        const best = selectBestEvent(m, bankroll);
+        if (best) extracted.push(best);
       }
 
       setLivePicks(extracted.length > 0 ? extracted : DEMO_PICKS);
@@ -404,14 +459,10 @@ export default function SuggestionsPage() {
   ];
 
   let filteredPicks =
-    selectedDateKey === "all"
-      ? picks
-      : dateGroups[selectedDateKey] ?? [];
+    selectedDateKey === "all" ? picks : dateGroups[selectedDateKey] ?? [];
 
   if (selectedMarketCat !== "all") {
-    filteredPicks = filteredPicks.filter(
-      (p) => p.market_type === selectedMarketCat
-    );
+    filteredPicks = filteredPicks.filter((p) => p.market_type === selectedMarketCat);
   }
 
   const actionable = filteredPicks
@@ -423,21 +474,23 @@ export default function SuggestionsPage() {
     0
   );
   const totalExpectedProfit = actionable.reduce(
-    (s, p) =>
-      s + Math.round(bankroll * p.kelly_fraction) * p.expected_value,
+    (s, p) => s + Math.round(bankroll * p.kelly_fraction) * p.expected_value,
     0
   );
+
+  const realCount = actionable.filter((p) => p.bookmaker !== "📊 Modèle Poisson").length;
+  const statCount = actionable.filter((p) => p.bookmaker === "📊 Modèle Poisson").length;
 
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <PageHeader
-            eyebrow="Rigueur Quantitatifs · Live Odds API Multi-Marchés"
-            title="Panoplie de Paris Suggérés (Cotes Réelles Multi-Marchés Bookmakers)"
+            eyebrow="Moteur Hybride · Bookmakers Réels + Modèle Statistique Poisson"
+            title="Panoplie de Paris Suggérés"
           />
           <p className="mt-1 text-xs" style={{ color: "var(--color-muted)" }}>
-            Sélection intelligente de l'événement le plus probable par match parmi les cotes réelles (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap).
+            Événement optimal par match : Cotes réelles (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap) + estimations Poisson (Cartons, Tirs, Corners, Fautes).
           </p>
         </div>
         <button
@@ -457,11 +510,8 @@ export default function SuggestionsPage() {
       />
 
       <div className="mb-6 flex flex-wrap items-center gap-2">
-        <span
-          className="text-[11px] font-mono tracking-wide mr-1"
-          style={{ color: "var(--color-muted)" }}
-        >
-          Type de Pari Réel :
+        <span className="text-[11px] font-mono tracking-wide mr-1" style={{ color: "var(--color-muted)" }}>
+          Marché :
         </span>
         {MARKET_CATEGORY_FILTERS.map((cat) => {
           const active = selectedMarketCat === cat.key;
@@ -472,9 +522,7 @@ export default function SuggestionsPage() {
               onClick={() => setSelectedMarketCat(cat.key)}
               className="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all"
               style={{
-                background: active
-                  ? "var(--color-blue)"
-                  : "var(--color-surface-2)",
+                background: active ? "var(--color-blue)" : "var(--color-surface-2)",
                 color: active ? "#ffffff" : "var(--color-text)",
               }}
             >
@@ -486,57 +534,60 @@ export default function SuggestionsPage() {
       </div>
 
       <div
-        className="mb-6 grid grid-cols-3 gap-4 rounded-xl p-5"
-        style={{
-          background: "var(--color-surface)",
-          border: "1px solid var(--color-border)",
-        }}
+        className="mb-6 grid grid-cols-2 sm:grid-cols-4 gap-4 rounded-xl p-5"
+        style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
       >
         <div>
-          <div
-            className="font-mono text-[11px] uppercase tracking-wide"
-            style={{ color: "var(--color-muted)" }}
-          >
-            Suggestions qualifiées
+          <div className="font-mono text-[11px] uppercase tracking-wide" style={{ color: "var(--color-muted)" }}>
+            Total suggestions
           </div>
-          <div className="mt-1 font-mono text-2xl font-bold">
-            {actionable.length}
+          <div className="mt-1 font-mono text-2xl font-bold">{actionable.length}</div>
+        </div>
+        <div>
+          <div className="font-mono text-[11px] uppercase tracking-wide" style={{ color: "var(--color-muted)" }}>
+            Cotes Réelles Bookmakers
+          </div>
+          <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-success)" }}>
+            {realCount}
           </div>
         </div>
         <div>
-          <div
-            className="font-mono text-[11px] uppercase tracking-wide"
-            style={{ color: "var(--color-muted)" }}
-          >
-            Exposition Kelly Prudente
+          <div className="font-mono text-[11px] uppercase tracking-wide" style={{ color: "var(--color-muted)" }}>
+            Exposition Kelly
           </div>
-          <div
-            className="mt-1 font-mono text-2xl font-bold"
-            style={{ color: "var(--color-amber)" }}
-          >
+          <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-amber)" }}>
             {totalStake}€
           </div>
         </div>
         <div>
-          <div
-            className="font-mono text-[11px] uppercase tracking-wide"
-            style={{ color: "var(--color-muted)" }}
-          >
+          <div className="font-mono text-[11px] uppercase tracking-wide" style={{ color: "var(--color-muted)" }}>
             Profit Espéré (+EV)
           </div>
-          <div
-            className="mt-1 font-mono text-2xl font-bold"
-            style={{ color: "var(--color-success)" }}
-          >
+          <div className="mt-1 font-mono text-2xl font-bold" style={{ color: "var(--color-success)" }}>
             +{totalExpectedProfit.toFixed(0)}€
           </div>
+        </div>
+      </div>
+
+      {/* Légende */}
+      <div
+        className="mb-4 flex flex-wrap gap-3 rounded-lg p-3 text-[11px]"
+        style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}
+      >
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full" style={{ background: "var(--color-success)" }} />
+          <span style={{ color: "var(--color-muted)" }}><strong style={{ color: "var(--color-text)" }}>{realCount}</strong> suggestions avec cotes réelles des bookmakers</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block w-2 h-2 rounded-full border" style={{ borderColor: "var(--color-border)" }} />
+          <span style={{ color: "var(--color-muted)" }}><strong style={{ color: "var(--color-text)" }}>{statCount}</strong> estimations Poisson (Cartons / Tirs / Corners / Fautes) — vérifier la cote chez votre bookmaker</span>
         </div>
       </div>
 
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Analyse des cotes réelles multi-marchés et détection des événements optimaux...</p>
+          <p className="text-sm font-medium">Analyse hybride des marchés réels et estimations statistiques...</p>
         </div>
       )}
 
@@ -544,20 +595,15 @@ export default function SuggestionsPage() {
         <Card className="overflow-hidden">
           {actionable.length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-sm font-medium">Aucune suggestion qualifiée détectée pour ces critères</p>
+              <p className="text-sm font-medium">Aucune suggestion qualifiée pour ces critères</p>
               <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-                Seules les cotes réelles avec Edge positif et forte probabilité sont retenues.
+                Seuls les événements avec Edge positif et probabilité ≥ 22% sont retenus.
               </p>
             </div>
           ) : (
             <div>
               {actionable.map((pick, i) => (
-                <SuggestionRow
-                  key={pick.id}
-                  pick={pick}
-                  rank={i + 1}
-                  bankroll={bankroll}
-                />
+                <SuggestionRow key={pick.id} pick={pick} rank={i + 1} bankroll={bankroll} />
               ))}
             </div>
           )}
