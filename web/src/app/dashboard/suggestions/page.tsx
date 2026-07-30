@@ -246,20 +246,26 @@ export default function SuggestionsPage() {
       const extracted: BettingPick[] = [];
 
       for (const m of matches) {
-        // 1. Value bets 1X2 réels
-        if (m.market_odds && m.best_outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
-          const mktOdd = m.market_odds[m.best_outcome];
-          const modelP = m.model_probs[m.best_outcome];
+        const matchCandidates: BettingPick[] = [];
 
-          // Filtre de rigueur : cote entre 1.35 et 4.50 max, probabilité >= 22%
-          if (mktOdd >= 1.35 && mktOdd <= 4.50 && modelP >= 0.22) {
+        // Probabilité maximale 1X2
+        const best1X2Outcome = m.best_outcome;
+        const model1X2Prob = best1X2Outcome ? m.model_probs[best1X2Outcome] : 0;
+        const is1X2Dominant = model1X2Prob >= 0.70; // 70%+ de certitude sur 1X2
+
+        // 1. Value bets 1X2 (Retenu en priorité SI certitude >= 70% OU si très bon EV)
+        if (m.market_odds && best1X2Outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
+          const mktOdd = m.market_odds[best1X2Outcome];
+
+          // Retenu si cote raisonnable (1.35 à 4.50) ET certitude >= 70% (ou proba minimum 45% avec fort EV)
+          if (mktOdd >= 1.35 && mktOdd <= 4.50 && (is1X2Dominant || model1X2Prob >= 0.45)) {
             const implP = 1 / mktOdd;
-            const edge = modelP - implP;
-            const label = m.best_outcome === "home" ? `${m.home_team} gagne` : m.best_outcome === "away" ? `${m.away_team} gagne` : "Match nul";
+            const edge = model1X2Prob - implP;
+            const label = best1X2Outcome === "home" ? `${m.home_team} gagne` : best1X2Outcome === "away" ? `${m.away_team} gagne` : "Match nul";
             const kellyRaw = edge / (mktOdd - 1);
-            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03); // Max 3%
+            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
 
-            extracted.push({
+            matchCandidates.push({
               id: `live-${m.id}-1x2`,
               match_id: m.id,
               home_team: m.home_team,
@@ -268,14 +274,14 @@ export default function SuggestionsPage() {
               sport: m.sport,
               commence_time: m.commence_time,
               market_type: "1X2",
-              outcome: m.best_outcome,
+              outcome: best1X2Outcome,
               outcome_label: label,
               odds: mktOdd,
-              model_probability: modelP,
+              model_probability: model1X2Prob,
               market_probability: implP,
               edge,
               expected_value: m.best_ev,
-              confidence: edge >= 0.07 ? "high" : edge >= 0.04 ? "medium" : "low",
+              confidence: is1X2Dominant ? "high" : edge >= 0.05 ? "medium" : "low",
               kelly_fraction: kelly,
               kelly_stake_euros: Math.round(bankroll * kelly),
               bookmaker: m.best_bookmaker ?? "OddsAPI",
@@ -285,19 +291,20 @@ export default function SuggestionsPage() {
           }
         }
 
-        // 2. Panoplie statistique Poisson (Filtres de rigueur : proba >= 58%, cotes <= 3.50)
+        // 2. Panoplie statistique Poisson (Si 1X2 < 70%, on cherche les événements alternatifs les plus probables : Corners, Cartons, Fautes, Tirs, Buts/BTTS)
         if (m.stat_rates) {
           const panoply = computeFullMarketPanoply(m.stat_rates);
           const candidateMarkets = [
             ...panoply.goals,
             ...panoply.corners,
             ...panoply.cards,
+            ...panoply.fouls,
             ...panoply.shots,
           ];
 
           for (const item of candidateMarkets) {
-            // Uniquement si probabilité entre 58% et 88% et fair odds entre 1.30 et 3.20
-            if (item.modelProb >= 0.58 && item.modelProb <= 0.88 && item.fairOdds >= 1.25 && item.fairOdds <= 3.20) {
+            // Filtre de certitude et d'EV pour les marchés alternatifs
+            if (item.modelProb >= 0.55 && item.modelProb <= 0.88 && item.fairOdds >= 1.22 && item.fairOdds <= 3.50) {
               const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
               if (marketOdds < 1.35 || marketOdds > 4.20) continue;
 
@@ -310,7 +317,7 @@ export default function SuggestionsPage() {
               const kellyRaw = edge / (marketOdds - 1);
               const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
 
-              extracted.push({
+              matchCandidates.push({
                 id: `live-${m.id}-${item.category}-${item.selection}`,
                 match_id: m.id,
                 home_team: m.home_team,
@@ -326,7 +333,7 @@ export default function SuggestionsPage() {
                 market_probability: implP,
                 edge,
                 expected_value: parseFloat(ev.toFixed(4)),
-                confidence: item.modelProb >= 0.66 ? "high" : "medium",
+                confidence: item.modelProb >= 0.65 ? "high" : "medium",
                 kelly_fraction: kelly,
                 kelly_stake_euros: Math.round(bankroll * kelly),
                 bookmaker: "SofaScore Quant",
@@ -336,6 +343,20 @@ export default function SuggestionsPage() {
             }
           }
         }
+
+        // Sélection intelligente par match : Trier les candidats par probabilité + EV
+        // Si 1X2 < 70%, privilégier les marchés alternatifs qui maximisent la probabilité
+        matchCandidates.sort((a, b) => {
+          if (!is1X2Dominant) {
+            // Favoriser la probabilité de réussite la plus élevée
+            return b.model_probability - a.model_probability;
+          }
+          return b.expected_value - a.expected_value;
+        });
+
+        // Retenir les 2 meilleurs événements uniques par match
+        const topForMatch = matchCandidates.slice(0, 2);
+        extracted.push(...topForMatch);
       }
 
       setLivePicks(extracted.length > 0 ? extracted : DEMO_PICKS);
