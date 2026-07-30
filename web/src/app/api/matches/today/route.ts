@@ -1,21 +1,20 @@
 /**
- * Route API : Prochains matchs réels via The Odds API
+ * Route API : Prochains matchs réels via The Odds API Multi-Marchés
  *
- * Source : The Odds API (ODDS_API_KEY) — cotes réelles des bookmakers
- * Ligues couvertes : EPL, La Liga, Bundesliga, Serie A, Ligue 1, UCL, Europa League
- *
- * Filtres quants de rigueur (Filtre anti-aberrations) :
- * - Cotes autorisées : entre 1.30 et 4.50 (Exclusion stricte des cotes irrationnelles de 12.00, 32.00...)
- * - Probabilité modèle minimale : >= 22%
- * - EV espéré : entre +2.0% et +25.0% (Exclusion des anomalies de cote)
- * - Capital Kelly : plafonné à 3.0% de la bankroll max (Gestion des risques stricte)
+ * Source : The Odds API (ODDS_API_KEY) — cotes réelles des bookmakers européens
+ * Marchés réels extraits :
+ * - h2h (1X2 Vainqueur)
+ * - totals & alternate_totals (Over/Under Buts : 0.5, 1.5, 2.5, 3.5, 4.5)
+ * - btts (Les deux équipes marquent : Oui / Non)
+ * - double_chance (1X, X2, 12)
+ * - draw_no_bet (DNB Domicile / DNB Extérieur)
+ * - spreads (Handicap asiatique)
  */
 
 import { NextResponse } from "next/server";
 
 const ODDS_API_KEY = process.env.ODDS_API_KEY;
 
-// Configurations des ligues
 const SPORTS_CONFIG = [
   { key: "soccer_epl",                    name: "Premier League",    country: "England",  flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿" },
   { key: "soccer_spain_la_liga",          name: "La Liga",           country: "Spain",    flag: "🇪🇸" },
@@ -67,6 +66,16 @@ function poissonProbs(lambdaHome: number, lambdaAway: number) {
   return { home: pHome / total, draw: pDraw / total, away: pAway / total };
 }
 
+export type RealMarketOddsItem = {
+  category: "1X2" | "totals" | "btts" | "double_chance" | "draw_no_bet" | "handicap";
+  selection: string;
+  label: string;
+  odds: number;
+  bookmaker: string;
+  line?: number;
+  raw_outcome?: string;
+};
+
 export async function GET() {
   if (!ODDS_API_KEY) {
     return NextResponse.json({
@@ -76,113 +85,202 @@ export async function GET() {
     }, { status: 500 });
   }
 
+  // 1. Fetch des cotes principales (h2h, totals, spreads) sur tous les championnats
   const results = await Promise.allSettled(
     SPORTS_CONFIG.map(({ key, name, flag }) =>
       fetch(
-        `https://api.the-odds-api.com/v4/sports/${key}/odds?apiKey=${ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal`,
-        { next: { revalidate: 3600 } }
+        `https://api.the-odds-api.com/v4/sports/${key}/odds?apiKey=${ODDS_API_KEY}&regions=eu&markets=h2h,totals,spreads&oddsFormat=decimal`,
+        { next: { revalidate: 1800 } }
       )
         .then(r => r.ok ? r.json() : [])
-        .then(events => ({ events: Array.isArray(events) ? events : [], league: name, flag }))
-        .catch(() => ({ events: [], league: name, flag }))
+        .then(events => ({ events: Array.isArray(events) ? events : [], league: name, flag, sportKey: key }))
+        .catch(() => ({ events: [], league: name, flag, sportKey: key }))
+    )
+  );
+
+  const rawEventsList: Array<{ event: any; league: string; flag: string; sportKey: string }> = [];
+
+  for (const res of results) {
+    if (res.status !== "fulfilled") continue;
+    const { events, league, flag, sportKey } = res.value;
+    for (const ev of events) {
+      if (ev.bookmakers?.length) {
+        rawEventsList.push({ event: ev, league, flag, sportKey });
+      }
+    }
+  }
+
+  // 2. Pour les 15 premiers matchs, fetch en parallèle les marchés avancés (btts, alternate_totals, double_chance, draw_no_bet)
+  const topEvents = rawEventsList.slice(0, 15);
+  const additionalOddsMap = new Map<string, any>();
+
+  await Promise.allSettled(
+    topEvents.map(({ event, sportKey }) =>
+      fetch(
+        `https://api.the-odds-api.com/v4/sports/${sportKey}/events/${event.id}/odds?apiKey=${ODDS_API_KEY}&regions=eu&markets=btts,alternate_totals,double_chance,draw_no_bet&oddsFormat=decimal`,
+        { next: { revalidate: 1800 } }
+      )
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data?.bookmakers) additionalOddsMap.set(event.id, data.bookmakers);
+        })
+        .catch(() => {})
     )
   );
 
   const matches: object[] = [];
 
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    const { events, league, flag } = result.value;
+  for (const { event, league, flag } of rawEventsList) {
+    let bestHome = 0, bestDraw = 0, bestAway = 0, bestBk = "";
+    const realMarkets: RealMarketOddsItem[] = [];
 
-    for (const event of events) {
-      if (!event.bookmakers?.length) continue;
-
-      let bestHome = 0, bestDraw = 0, bestAway = 0, bestBk = "";
-      for (const bk of event.bookmakers) {
-        const h2h = bk.markets?.find((m: { key: string }) => m.key === "h2h");
-        if (!h2h?.outcomes?.length) continue;
-        const prices: Record<string, number> = {};
-        for (const o of h2h.outcomes) prices[o.name] = o.price;
-        const h = prices[event.home_team] ?? 0;
-        const a = prices[event.away_team] ?? 0;
-        const d = prices["Draw"] ?? 0;
-        if (h > bestHome) { bestHome = h; bestBk = bk.key; }
-        if (a > bestAway) bestAway = a;
-        if (d > bestDraw) bestDraw = d;
-      }
-
-      if (!bestHome || !bestAway) continue;
-
-      const stats = getStatRates(league);
-      const modelProbs = poissonProbs(stats.goals_home, stats.goals_away);
-
-      const implHome = 1 / bestHome;
-      const implDraw = bestDraw > 1 ? 1 / bestDraw : 0;
-      const implAway = 1 / bestAway;
-
-      const edgeHome = modelProbs.home - implHome;
-      const edgeDraw = modelProbs.draw - implDraw;
-      const edgeAway = modelProbs.away - implAway;
-
-      const evHome = modelProbs.home * bestHome - 1;
-      const evDraw = modelProbs.draw * bestDraw - 1;
-      const evAway = modelProbs.away * bestAway - 1;
-
-      // -------------------------------------------------------------
-      // FILTRAGE QUANT RIGOUREUX — Anti-Paris Irrationnels (ex: @12.00, @32.00)
-      // 1. Cotes obligatoirement entre 1.30 et 4.50 max
-      // 2. Probabilité modèle d'au moins 22% (0.22)
-      // 3. Expected Value (EV) entre +2.0% et +25.0% max (filtre anomalies)
-      // -------------------------------------------------------------
-      const candidates = [
-        { outcome: "home" as const, edge: edgeHome, ev: evHome, odd: bestHome, prob: modelProbs.home },
-        { outcome: "draw" as const, edge: edgeDraw, ev: evDraw, odd: bestDraw, prob: modelProbs.draw },
-        { outcome: "away" as const, edge: edgeAway, ev: evAway, odd: bestAway, prob: modelProbs.away },
-      ].filter(c =>
-        c.odd >= 1.30 &&
-        c.odd <= 4.50 &&
-        c.prob >= 0.22 &&
-        c.ev >= 0.02 &&
-        c.ev <= 0.25
-      );
-
-      candidates.sort((a, b) => b.ev - a.ev);
-      const best = candidates[0] ?? null;
-
-      matches.push({
-        id: `odds-${event.id}`,
-        sport: "football",
-        competition: league,
-        competition_flag: flag,
-        home_team: event.home_team,
-        away_team: event.away_team,
-        commence_time: event.commence_time,
-        status: new Date(event.commence_time) > new Date() ? "Scheduled" : "Live",
-        model_probs: modelProbs,
-        market_odds: { home: bestHome, draw: bestDraw, away: bestAway },
-        best_bookmaker: bestBk,
-        best_outcome: best?.outcome ?? null,
-        best_edge: best ? parseFloat((best.edge * 100).toFixed(1)) : null,
-        best_ev: best ? parseFloat(best.ev.toFixed(4)) : null,
-        is_demo: false,
-        stat_rates: {
-          lambda_goals_home: stats.goals_home,
-          lambda_goals_away: stats.goals_away,
-          lambda_corners_home: stats.corners_home,
-          lambda_corners_away: stats.corners_away,
-          lambda_cards_home: stats.cards_home,
-          lambda_cards_away: stats.cards_away,
-          lambda_fouls_home: stats.fouls_home,
-          lambda_fouls_away: stats.fouls_away,
-          lambda_shots_home: stats.shots_home,
-          lambda_shots_away: stats.shots_away,
-          lambda_sot_home: stats.sot_home,
-          lambda_sot_away: stats.sot_away,
-          lambda_offsides_home: stats.offsides_home,
-          lambda_offsides_away: stats.offsides_away,
-        },
-      });
+    // Extraction h2h
+    for (const bk of event.bookmakers) {
+      const h2h = bk.markets?.find((m: { key: string }) => m.key === "h2h");
+      if (!h2h?.outcomes?.length) continue;
+      const prices: Record<string, number> = {};
+      for (const o of h2h.outcomes) prices[o.name] = o.price;
+      const h = prices[event.home_team] ?? 0;
+      const a = prices[event.away_team] ?? 0;
+      const d = prices["Draw"] ?? 0;
+      if (h > bestHome) { bestHome = h; bestBk = bk.key; }
+      if (a > bestAway) bestAway = a;
+      if (d > bestDraw) bestDraw = d;
     }
+
+    if (!bestHome || !bestAway) continue;
+
+    // Ajouter 1X2 réels
+    realMarkets.push(
+      { category: "1X2", selection: "home", label: `${event.home_team} gagne`, odds: bestHome, bookmaker: bestBk },
+      { category: "1X2", selection: "away", label: `${event.away_team} gagne`, odds: bestAway, bookmaker: bestBk }
+    );
+    if (bestDraw > 1) {
+      realMarkets.push({ category: "1X2", selection: "draw", label: "Match nul", odds: bestDraw, bookmaker: bestBk });
+    }
+
+    // Extraction totals & spreads principaux
+    for (const bk of event.bookmakers) {
+      for (const m of bk.markets ?? []) {
+        if (m.key === "totals") {
+          for (const o of m.outcomes ?? []) {
+            if (o.price >= 1.30 && o.price <= 4.50) {
+              const label = o.name === "Over" ? `Plus de ${o.point} Buts` : `Moins de ${o.point} Buts`;
+              realMarkets.push({ category: "totals", selection: `${o.name} ${o.point}`, label, odds: o.price, bookmaker: bk.key, line: o.point, raw_outcome: o.name });
+            }
+          }
+        } else if (m.key === "spreads") {
+          for (const o of m.outcomes ?? []) {
+            if (o.price >= 1.30 && o.price <= 4.50) {
+              const ptStr = o.point > 0 ? `+${o.point}` : `${o.point}`;
+              const label = `Handicap ${o.name} (${ptStr})`;
+              realMarkets.push({ category: "handicap", selection: `${o.name} ${ptStr}`, label, odds: o.price, bookmaker: bk.key, line: o.point, raw_outcome: o.name });
+            }
+          }
+        }
+      }
+    }
+
+    // Extraction marchés avancés (event-level)
+    const extraBks = additionalOddsMap.get(event.id);
+    if (extraBks) {
+      for (const bk of extraBks) {
+        for (const m of bk.markets ?? []) {
+          if (m.key === "btts") {
+            for (const o of m.outcomes ?? []) {
+              if (o.price >= 1.30 && o.price <= 4.50) {
+                const label = o.name === "Yes" ? "Les deux équipes marquent : Oui" : "Les deux équipes marquent : Non";
+                realMarkets.push({ category: "btts", selection: o.name === "Yes" ? "BTTS Oui" : "BTTS Non", label, odds: o.price, bookmaker: bk.key, raw_outcome: o.name });
+              }
+            }
+          } else if (m.key === "double_chance") {
+            for (const o of m.outcomes ?? []) {
+              if (o.price >= 1.20 && o.price <= 4.50) {
+                realMarkets.push({ category: "double_chance", selection: `Double Chance ${o.name}`, label: `Double Chance ${o.name}`, odds: o.price, bookmaker: bk.key, raw_outcome: o.name });
+              }
+            }
+          } else if (m.key === "draw_no_bet") {
+            for (const o of m.outcomes ?? []) {
+              if (o.price >= 1.25 && o.price <= 4.50) {
+                realMarkets.push({ category: "draw_no_bet", selection: `DNB ${o.name}`, label: `Remboursé si nul : ${o.name}`, odds: o.price, bookmaker: bk.key, raw_outcome: o.name });
+              }
+            }
+          } else if (m.key === "alternate_totals") {
+            for (const o of m.outcomes ?? []) {
+              if (o.price >= 1.30 && o.price <= 4.50) {
+                const label = o.name === "Over" ? `Plus de ${o.point} Buts` : `Moins de ${o.point} Buts`;
+                realMarkets.push({ category: "totals", selection: `${o.name} ${o.point}`, label, odds: o.price, bookmaker: bk.key, line: o.point, raw_outcome: o.name });
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const stats = getStatRates(league);
+    const modelProbs = poissonProbs(stats.goals_home, stats.goals_away);
+
+    const implHome = 1 / bestHome;
+    const implDraw = bestDraw > 1 ? 1 / bestDraw : 0;
+    const implAway = 1 / bestAway;
+
+    const edgeHome = modelProbs.home - implHome;
+    const edgeDraw = modelProbs.draw - implDraw;
+    const edgeAway = modelProbs.away - implAway;
+
+    const evHome = modelProbs.home * bestHome - 1;
+    const evDraw = modelProbs.draw * bestDraw - 1;
+    const evAway = modelProbs.away * bestAway - 1;
+
+    const candidates = [
+      { outcome: "home" as const, edge: edgeHome, ev: evHome, odd: bestHome, prob: modelProbs.home },
+      { outcome: "draw" as const, edge: edgeDraw, ev: evDraw, odd: bestDraw, prob: modelProbs.draw },
+      { outcome: "away" as const, edge: edgeAway, ev: evAway, odd: bestAway, prob: modelProbs.away },
+    ].filter(c =>
+      c.odd >= 1.30 &&
+      c.odd <= 4.50 &&
+      c.prob >= 0.22 &&
+      c.ev >= 0.02 &&
+      c.ev <= 0.25
+    );
+
+    candidates.sort((a, b) => b.ev - a.ev);
+    const best = candidates[0] ?? null;
+
+    matches.push({
+      id: `odds-${event.id}`,
+      sport: "football",
+      competition: league,
+      competition_flag: flag,
+      home_team: event.home_team,
+      away_team: event.away_team,
+      commence_time: event.commence_time,
+      status: new Date(event.commence_time) > new Date() ? "Scheduled" : "Live",
+      model_probs: modelProbs,
+      market_odds: { home: bestHome, draw: bestDraw, away: bestAway },
+      real_markets: realMarkets,
+      best_bookmaker: bestBk,
+      best_outcome: best?.outcome ?? null,
+      best_edge: best ? parseFloat((best.edge * 100).toFixed(1)) : null,
+      best_ev: best ? parseFloat(best.ev.toFixed(4)) : null,
+      is_demo: false,
+      stat_rates: {
+        lambda_goals_home: stats.goals_home,
+        lambda_goals_away: stats.goals_away,
+        lambda_corners_home: stats.corners_home,
+        lambda_corners_away: stats.corners_away,
+        lambda_cards_home: stats.cards_home,
+        lambda_cards_away: stats.cards_away,
+        lambda_fouls_home: stats.fouls_home,
+        lambda_fouls_away: stats.fouls_away,
+        lambda_shots_home: stats.shots_home,
+        lambda_shots_away: stats.shots_away,
+        lambda_sot_home: stats.sot_home,
+        lambda_sot_away: stats.sot_away,
+        lambda_offsides_home: stats.offsides_home,
+        lambda_offsides_away: stats.offsides_away,
+      },
+    });
   }
 
   matches.sort((a: any, b: any) =>
@@ -190,7 +288,7 @@ export async function GET() {
   );
 
   return NextResponse.json({
-    source: "The Odds API (cotes réelles bookmakers européens)",
+    source: "The Odds API (cotes réelles multi-marchés bookmakers européens)",
     total_matches: matches.length,
     matches,
     is_demo: false,

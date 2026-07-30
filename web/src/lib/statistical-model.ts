@@ -46,6 +46,89 @@ export function probBTTS(lambdaHome: number, lambdaAway: number): number {
   return pHomeScoring * pAwayScoring;
 }
 
+// ---------------------------------------------------------------------------
+// Probabilités exactes pour marchés réels bookmakers
+// ---------------------------------------------------------------------------
+
+/**
+ * Probabilités 1X2 via matrice de Poisson bivariée
+ */
+export function poisson1X2(lambdaHome: number, lambdaAway: number): { home: number; draw: number; away: number } {
+  const MAX = 9;
+  let pHome = 0, pDraw = 0, pAway = 0;
+  for (let i = 0; i <= MAX; i++) {
+    for (let j = 0; j <= MAX; j++) {
+      const p = poissonPMF(i, lambdaHome) * poissonPMF(j, lambdaAway);
+      if (i > j) pHome += p;
+      else if (i === j) pDraw += p;
+      else pAway += p;
+    }
+  }
+  const total = pHome + pDraw + pAway;
+  return { home: pHome / total, draw: pDraw / total, away: pAway / total };
+}
+
+/**
+ * Double Chance : 1X (Home or Draw), X2 (Draw or Away), 12 (Home or Away)
+ */
+export function probDoubleChance(probs: { home: number; draw: number; away: number }): {
+  home_draw: number; away_draw: number; home_away: number;
+} {
+  return {
+    home_draw: probs.home + probs.draw,
+    away_draw: probs.draw + probs.away,
+    home_away: probs.home + probs.away,
+  };
+}
+
+/**
+ * Draw No Bet : Si match nul → remboursement
+ * P(Home DNB) = P(Home) / (1 - P(Draw))
+ */
+export function probDrawNoBet(probs: { home: number; draw: number; away: number }): {
+  home: number; away: number;
+} {
+  const nonDraw = 1 - probs.draw;
+  return {
+    home: nonDraw > 0 ? probs.home / nonDraw : 0.5,
+    away: nonDraw > 0 ? probs.away / nonDraw : 0.5,
+  };
+}
+
+/**
+ * Handicap / Spread asiatique via Poisson
+ * Ex: Home -1.5 → P(scoreHome - scoreAway > 1.5)
+ */
+export function probHandicap(lambdaHome: number, lambdaAway: number, line: number): {
+  home: number; away: number;
+} {
+  const MAX = 9;
+  let pHomeCover = 0;
+  for (let i = 0; i <= MAX; i++) {
+    for (let j = 0; j <= MAX; j++) {
+      const diff = i - j; // score home - score away
+      const p = poissonPMF(i, lambdaHome) * poissonPMF(j, lambdaAway);
+      if (diff + line > 0) pHomeCover += p; // Home covers the spread
+    }
+  }
+  return { home: Math.min(Math.max(pHomeCover, 0), 1), away: Math.min(Math.max(1 - pHomeCover, 0), 1) };
+}
+
+/**
+ * Sélecteur d'événement optimal — Scan tous les marchés réels et retourne
+ * celui avec la probabilité modèle la plus élevée ET un edge positif.
+ */
+export type OptimalEvent = {
+  market_type: string;
+  selection: string;
+  label: string;
+  model_prob: number;
+  market_odds: number;
+  bookmaker: string;
+  edge: number;
+  ev: number;
+};
+
 export type StatMarketItem = {
   marketName: string;
   category: "goals" | "corners" | "cards" | "fouls" | "shots" | "offsides";

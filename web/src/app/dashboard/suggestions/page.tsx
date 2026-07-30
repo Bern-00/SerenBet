@@ -6,9 +6,27 @@ import { ConfidenceBadge } from "@/components/confidence-badge";
 import { GeminiFactCheckBadge } from "@/components/gemini-fact-check-badge";
 import { DateFilterBar, type DateFilterOption } from "@/components/date-filter-bar";
 import { DEMO_PICKS } from "@/lib/demo-data";
-import { computeFullMarketPanoply } from "@/lib/statistical-model";
+import {
+  probOver,
+  probUnder,
+  probBTTS,
+  probDoubleChance,
+  probDrawNoBet,
+  probHandicap,
+  computeFullMarketPanoply,
+} from "@/lib/statistical-model";
 import type { BettingPick, MarketCategory } from "@/lib/types";
 import Link from "next/link";
+
+type RealMarketItem = {
+  category: "1X2" | "totals" | "btts" | "double_chance" | "draw_no_bet" | "handicap";
+  selection: string;
+  label: string;
+  odds: number;
+  bookmaker: string;
+  line?: number;
+  raw_outcome?: string;
+};
 
 type LiveMatch = {
   id: string;
@@ -20,6 +38,7 @@ type LiveMatch = {
   status: string;
   model_probs: { home: number; draw: number; away: number };
   market_odds: { home: number; draw: number; away: number } | null;
+  real_markets?: RealMarketItem[];
   best_bookmaker: string | null;
   best_outcome: "home" | "draw" | "away" | null;
   best_edge: number | null;
@@ -65,12 +84,13 @@ const MARKET_CATEGORY_FILTERS: Array<{
   label: string;
   icon: string;
 }> = [
-  { key: "all", label: "Tous les paris", icon: "🔥" },
+  { key: "all", label: "Tous les paris réels", icon: "🔥" },
   { key: "1X2", label: "1X2 Vainqueur", icon: "🏆" },
-  { key: "goals", label: "Buts / Over-Under", icon: "⚽" },
-  { key: "corners", label: "Corners", icon: "🚩" },
-  { key: "cards", label: "Cartons Jaunes", icon: "🟨" },
-  { key: "shots", label: "Tirs & Cadrés", icon: "🎯" },
+  { key: "totals", label: "Over/Under Buts", icon: "⚽" },
+  { key: "btts", label: "Les 2 Marquent (BTTS)", icon: "🤝" },
+  { key: "double_chance", label: "Double Chance", icon: "🛡️" },
+  { key: "draw_no_bet", label: "Draw No Bet (DNB)", icon: "⚖️" },
+  { key: "handicap", label: "Handicap / Spreads", icon: "🎯" },
 ];
 
 function SuggestionRow({
@@ -85,12 +105,12 @@ function SuggestionRow({
   const stakeFromCurrentBankroll = Math.round(bankroll * pick.kelly_fraction);
 
   const marketBadgeColor =
-    pick.market_type === "corners"
+    pick.market_type === "btts"
       ? "var(--color-blue)"
-      : pick.market_type === "cards"
-        ? "var(--color-amber)"
-        : pick.market_type === "goals"
-          ? "var(--color-success)"
+      : pick.market_type === "totals"
+        ? "var(--color-success)"
+        : pick.market_type === "double_chance" || pick.market_type === "draw_no_bet"
+          ? "var(--color-amber)"
           : "var(--color-text)";
 
   return (
@@ -247,115 +267,104 @@ export default function SuggestionsPage() {
 
       for (const m of matches) {
         const matchCandidates: BettingPick[] = [];
+        const lambdaHome = m.stat_rates?.lambda_goals_home ?? 1.55;
+        const lambdaAway = m.stat_rates?.lambda_goals_away ?? 1.10;
+        const totalGoalsLambda = lambdaHome + lambdaAway;
 
-        // Probabilité maximale 1X2
-        const best1X2Outcome = m.best_outcome;
-        const model1X2Prob = best1X2Outcome ? m.model_probs[best1X2Outcome] : 0;
-        const is1X2Dominant = model1X2Prob >= 0.70; // 70%+ de certitude sur 1X2
+        // Probabilités du modèle
+        const model1X2 = m.model_probs;
+        const max1X2Prob = Math.max(model1X2.home, model1X2.away);
+        const is1X2Dominant = max1X2Prob >= 0.70; // 70%+ de certitude sur 1X2
 
-        // 1. Value bets 1X2 (Retenu en priorité SI certitude >= 70% OU si très bon EV)
-        if (m.market_odds && best1X2Outcome && m.best_ev && m.best_ev >= 0.02 && m.best_ev <= 0.25) {
-          const mktOdd = m.market_odds[best1X2Outcome];
+        // Scanner TOUS les marchés réels fournis par The Odds API pour ce match
+        if (m.real_markets && m.real_markets.length > 0) {
+          for (const item of m.real_markets) {
+            let modelProb = 0;
 
-          // Retenu si cote raisonnable (1.35 à 4.50) ET certitude >= 70% (ou proba minimum 45% avec fort EV)
-          if (mktOdd >= 1.35 && mktOdd <= 4.50 && (is1X2Dominant || model1X2Prob >= 0.45)) {
-            const implP = 1 / mktOdd;
-            const edge = model1X2Prob - implP;
-            const label = best1X2Outcome === "home" ? `${m.home_team} gagne` : best1X2Outcome === "away" ? `${m.away_team} gagne` : "Match nul";
-            const kellyRaw = edge / (mktOdd - 1);
-            const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
+            // Calcul de la probabilité modèle selon le type de marché réel
+            if (item.category === "1X2") {
+              if (item.selection === "home") modelProb = model1X2.home;
+              else if (item.selection === "away") modelProb = model1X2.away;
+              else if (item.selection === "draw") modelProb = model1X2.draw;
+            } else if (item.category === "totals") {
+              const line = item.line ?? 2.5;
+              if (item.raw_outcome === "Over" || item.selection.startsWith("Over")) {
+                modelProb = probOver(line, totalGoalsLambda);
+              } else {
+                modelProb = probUnder(line, totalGoalsLambda);
+              }
+            } else if (item.category === "btts") {
+              const bttsProb = probBTTS(lambdaHome, lambdaAway);
+              if (item.raw_outcome === "Yes" || item.selection.includes("Oui")) {
+                modelProb = bttsProb;
+              } else {
+                modelProb = 1 - bttsProb;
+              }
+            } else if (item.category === "double_chance") {
+              const dc = probDoubleChance(model1X2);
+              if (item.raw_outcome?.includes("Home") && item.raw_outcome?.includes("Draw")) modelProb = dc.home_draw;
+              else if (item.raw_outcome?.includes("Away") && item.raw_outcome?.includes("Draw")) modelProb = dc.away_draw;
+              else modelProb = dc.home_away;
+            } else if (item.category === "draw_no_bet") {
+              const dnb = probDrawNoBet(model1X2);
+              if (item.raw_outcome === m.home_team) modelProb = dnb.home;
+              else modelProb = dnb.away;
+            } else if (item.category === "handicap") {
+              const line = item.line ?? 0;
+              const hc = probHandicap(lambdaHome, lambdaAway, line);
+              modelProb = item.raw_outcome === m.home_team ? hc.home : hc.away;
+            }
 
-            matchCandidates.push({
-              id: `live-${m.id}-1x2`,
-              match_id: m.id,
-              home_team: m.home_team,
-              away_team: m.away_team,
-              competition: m.competition,
-              sport: m.sport,
-              commence_time: m.commence_time,
-              market_type: "1X2",
-              outcome: best1X2Outcome,
-              outcome_label: label,
-              odds: mktOdd,
-              model_probability: model1X2Prob,
-              market_probability: implP,
-              edge,
-              expected_value: m.best_ev,
-              confidence: is1X2Dominant ? "high" : edge >= 0.05 ? "medium" : "low",
-              kelly_fraction: kelly,
-              kelly_stake_euros: Math.round(bankroll * kelly),
-              bookmaker: m.best_bookmaker ?? "OddsAPI",
-              is_suspicious: false,
-              is_demo: false,
-            });
-          }
-        }
+            // Filtrage quant : cote entre 1.25 et 4.50, probabilité >= 22%, EV >= 2%
+            if (item.odds >= 1.25 && item.odds <= 4.50 && modelProb >= 0.22) {
+              const implP = 1 / item.odds;
+              const edge = modelProb - implP;
+              const ev = modelProb * item.odds - 1;
 
-        // 2. Panoplie statistique Poisson (Si 1X2 < 70%, on cherche les événements alternatifs les plus probables : Corners, Cartons, Fautes, Tirs, Buts/BTTS)
-        if (m.stat_rates) {
-          const panoply = computeFullMarketPanoply(m.stat_rates);
-          const candidateMarkets = [
-            ...panoply.goals,
-            ...panoply.corners,
-            ...panoply.cards,
-            ...panoply.fouls,
-            ...panoply.shots,
-          ];
+              if (ev >= 0.02 && ev <= 0.30) {
+                const kellyRaw = edge / (item.odds - 1);
+                const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
 
-          for (const item of candidateMarkets) {
-            // Filtre de certitude et d'EV pour les marchés alternatifs
-            if (item.modelProb >= 0.55 && item.modelProb <= 0.88 && item.fairOdds >= 1.22 && item.fairOdds <= 3.50) {
-              const marketOdds = parseFloat((item.fairOdds * 1.08).toFixed(2));
-              if (marketOdds < 1.35 || marketOdds > 4.20) continue;
-
-              const implP = 1 / marketOdds;
-              const edge = item.modelProb - implP;
-              const ev = item.modelProb * marketOdds - 1;
-
-              if (ev < 0.02 || ev > 0.20) continue;
-
-              const kellyRaw = edge / (marketOdds - 1);
-              const kelly = Math.min(Math.max(kellyRaw * 0.25, 0), 0.03);
-
-              matchCandidates.push({
-                id: `live-${m.id}-${item.category}-${item.selection}`,
-                match_id: m.id,
-                home_team: m.home_team,
-                away_team: m.away_team,
-                competition: m.competition,
-                sport: m.sport,
-                commence_time: m.commence_time,
-                market_type: item.category as MarketCategory,
-                outcome: item.selection,
-                outcome_label: item.selection,
-                odds: marketOdds,
-                model_probability: item.modelProb,
-                market_probability: implP,
-                edge,
-                expected_value: parseFloat(ev.toFixed(4)),
-                confidence: item.modelProb >= 0.65 ? "high" : "medium",
-                kelly_fraction: kelly,
-                kelly_stake_euros: Math.round(bankroll * kelly),
-                bookmaker: "SofaScore Quant",
-                is_suspicious: false,
-                is_demo: false,
-              });
+                matchCandidates.push({
+                  id: `live-${m.id}-${item.category}-${item.selection}-${item.bookmaker}`,
+                  match_id: m.id,
+                  home_team: m.home_team,
+                  away_team: m.away_team,
+                  competition: m.competition,
+                  sport: m.sport,
+                  commence_time: m.commence_time,
+                  market_type: item.category as MarketCategory,
+                  outcome: item.selection,
+                  outcome_label: item.label,
+                  odds: item.odds,
+                  model_probability: modelProb,
+                  market_probability: implP,
+                  edge,
+                  expected_value: parseFloat(ev.toFixed(4)),
+                  confidence: modelProb >= 0.65 ? "high" : modelProb >= 0.45 ? "medium" : "low",
+                  kelly_fraction: kelly,
+                  kelly_stake_euros: Math.round(bankroll * kelly),
+                  bookmaker: item.bookmaker,
+                  is_suspicious: false,
+                  is_demo: false,
+                });
+              }
             }
           }
         }
 
-        // Sélection intelligente par match : Trier les candidats par probabilité + EV
-        // Si 1X2 < 70%, privilégier les marchés alternatifs qui maximisent la probabilité
+        // Sélection intelligente par match :
+        // Si 1X2 < 70%, trier les marchés alternatifs par probabilité de réussite (confiance max)
+        // Sinon, trier par EV (+EV)
         matchCandidates.sort((a, b) => {
           if (!is1X2Dominant) {
-            // Favoriser la probabilité de réussite la plus élevée
             return b.model_probability - a.model_probability;
           }
           return b.expected_value - a.expected_value;
         });
 
-        // Retenir les 2 meilleurs événements uniques par match
-        const topForMatch = matchCandidates.slice(0, 2);
+        // Retenir le SEUL événement le plus probable et le plus rentable pour ce match
+        const topForMatch = matchCandidates.slice(0, 1);
         extracted.push(...topForMatch);
       }
 
@@ -406,8 +415,8 @@ export default function SuggestionsPage() {
   }
 
   const actionable = filteredPicks
-    .filter((p) => !p.is_suspicious && p.odds >= 1.35 && p.odds <= 4.50)
-    .sort((a, b) => b.expected_value - a.expected_value);
+    .filter((p) => !p.is_suspicious && p.odds >= 1.25 && p.odds <= 4.50)
+    .sort((a, b) => b.model_probability - a.model_probability);
 
   const totalStake = actionable.reduce(
     (s, p) => s + Math.round(bankroll * p.kelly_fraction),
@@ -424,11 +433,11 @@ export default function SuggestionsPage() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <PageHeader
-            eyebrow="Rigueur Quantitatifs · Live Odds API"
-            title="Panoplie de Paris Suggérés (Filtre Strict Cotes 1.35 – 4.50)"
+            eyebrow="Rigueur Quantitatifs · Live Odds API Multi-Marchés"
+            title="Panoplie de Paris Suggérés (Cotes Réelles Multi-Marchés Bookmakers)"
           />
           <p className="mt-1 text-xs" style={{ color: "var(--color-muted)" }}>
-            Filtre strict anti-paris irrationnels : Cotes bornées entre 1.35 et 4.50 max, probabilité modèle ≥ 22%, gestion des risques Kelly (max 3% bankroll).
+            Sélection intelligente de l'événement le plus probable par match parmi les cotes réelles (1X2, Over/Under, BTTS, Double Chance, DNB, Handicap).
           </p>
         </div>
         <button
@@ -452,7 +461,7 @@ export default function SuggestionsPage() {
           className="text-[11px] font-mono tracking-wide mr-1"
           style={{ color: "var(--color-muted)" }}
         >
-          Type de Pari :
+          Type de Pari Réel :
         </span>
         {MARKET_CATEGORY_FILTERS.map((cat) => {
           const active = selectedMarketCat === cat.key;
@@ -527,7 +536,7 @@ export default function SuggestionsPage() {
       {loading && (
         <div className="py-16 text-center">
           <div className="font-mono text-xl animate-pulse mb-2">⚽</div>
-          <p className="text-sm font-medium">Analyse et filtrage des paris rationnels en cours...</p>
+          <p className="text-sm font-medium">Analyse des cotes réelles multi-marchés et détection des événements optimaux...</p>
         </div>
       )}
 
@@ -535,9 +544,9 @@ export default function SuggestionsPage() {
         <Card className="overflow-hidden">
           {actionable.length === 0 ? (
             <div className="p-8 text-center">
-              <p className="text-sm font-medium">Aucune suggestion qualifiée avec cotes entre 1.35 et 4.50</p>
+              <p className="text-sm font-medium">Aucune suggestion qualifiée détectée pour ces critères</p>
               <p className="mt-1 text-sm" style={{ color: "var(--color-muted)" }}>
-                Toutes les cotes ont été filtrées pour éviter les spéculations trop risquées.
+                Seules les cotes réelles avec Edge positif et forte probabilité sont retenues.
               </p>
             </div>
           ) : (

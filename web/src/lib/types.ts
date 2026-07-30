@@ -113,7 +113,24 @@ export type UpcomingMatch = {
   stat_rates?: DetailedMatchStatsRates;
 };
 
-export type MarketCategory = "1X2" | "goals" | "corners" | "cards" | "fouls" | "shots" | "offsides";
+export type MarketCategory = "1X2" | "totals" | "btts" | "double_chance" | "draw_no_bet" | "handicap" | "goals" | "corners" | "cards" | "fouls" | "shots" | "offsides";
+
+/**
+ * Cotes réelles multi-marchés récupérées depuis The Odds API
+ * Chaque marché contient les meilleures cotes parmi tous les bookmakers
+ */
+export type RealMarketOdds = {
+  // Over/Under Buts (totals + alternate_totals)
+  totals: Array<{ line: number; over: number; under: number; bookmaker: string }>;
+  // Les deux équipes marquent
+  btts: { yes: number; no: number; bookmaker: string } | null;
+  // Double Chance
+  double_chance: { home_draw: number; away_draw: number; home_away: number; bookmaker: string } | null;
+  // Draw No Bet
+  draw_no_bet: { home: number; away: number; bookmaker: string } | null;
+  // Handicap / Spreads
+  spreads: Array<{ line: number; home: number; away: number; bookmaker: string }>;
+};
 
 export type BettingPick = {
   id: string;
@@ -125,7 +142,7 @@ export type BettingPick = {
   commence_time: string;
   market_type?: MarketCategory;
   outcome: "home" | "draw" | "away" | string;
-  outcome_label: string; // ex: "Arsenal gagne", "Plus de 9.5 Corners", "Plus de 3.5 Cartons"
+  outcome_label: string; // ex: "Arsenal gagne", "Over 2.5 Buts @1.53", "BTTS Oui @2.40"
   odds: number;
   model_probability: number;
   market_probability: number;
